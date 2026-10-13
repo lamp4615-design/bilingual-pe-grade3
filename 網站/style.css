@@ -67,6 +67,7 @@ th { color: var(--muted); font-weight: 700; font-size: .84rem; }
 .w-T { color: var(--t-teacher); } .w-Amy { color: var(--t-amy); } .w-Ben { color: var(--t-ben); } .w-Chris { color: var(--t-chris); } .w-Dora { color: var(--t-dora); } .w-Ss { color: var(--t-ss); }
 details { margin: 8px 0; } summary { cursor: pointer; font-weight: 700; padding: 6px 0; }
 .dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--brand); }
+.dot.hollow { background: transparent; border: 2px solid var(--brand); }
 .matrix td, .matrix th { text-align: center; padding: 6px 4px; } .matrix td:first-child, .matrix th:first-child { text-align: left; min-width: 220px; }
 .bar { display: flex; height: 20px; border-radius: 6px; overflow: hidden; background: var(--line); min-width: 160px; }
 .bar i { display: block; height: 100%; } .bar .g3 { background: var(--good); } .bar .g2 { background: var(--ok); } .bar .g1 { background: var(--try); }

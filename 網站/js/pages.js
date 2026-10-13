@@ -239,37 +239,129 @@ Pages.weak = async function () {
   };
 };
 
-/* ---------- 學習紀錄（老師） ---------- */
-Pages.records = async function (_, __, q) {
-  if (!API.enabled() || !API.pin()) return { html: `<h1>學習紀錄</h1><div class="notice warn">需要先連線後端並輸入老師密碼。<a href="#/settings">前往設定</a></div>` };
-  const units = await DATA.units(); const first = await DATA.unit(units[0].id); const L = first.lesson;
+/* ---------- 學習紀錄（老師）：歷程總覽｜評量｜省思 ---------- */
+function recTabs(cur) {
+  return `<div class="tabs">${[['', '歷程總覽'], ['eval', '學生評量'], ['reflect', '課後省思']].map(([k, n]) => `<a class="${cur === k ? 'on' : ''}" href="#/records${k ? '/' + k : ''}">${n}</a>`).join('')}</div>`;
+}
+const connected = () => API.enabled() && !!API.pin();
+const gate = () => `<div class="notice warn">這個分頁需要先連線後端並輸入老師密碼。<a href="#/settings">前往設定</a></div>`;
+const evalBars = (byItem) => Object.entries(byItem || {}).map(([k, g]) => {
+  const t = (g[1] || 0) + (g[2] || 0) + (g[3] || 0) || 1;
+  return `<div style="margin:10px 0"><b>${esc(k.replace('｜', ' · '))}</b><div class="bar"><i class="g3" style="width:${(g[3] || 0) / t * 100}%"></i><i class="g2" style="width:${(g[2] || 0) / t * 100}%"></i><i class="g1" style="width:${(g[1] || 0) / t * 100}%"></i></div>
+    <div class="small muted">優異 ${g[3] || 0}　達成 ${g[2] || 0}　努力中 ${g[1] || 0}</div></div>`;
+}).join('');
+
+/* 把「已教進度、省思、不熟悉、評量」與學習項目庫合起來，算出已學會什麼、建議複習什麼 */
+async function buildHistory(unitId) {
+  const { lesson: L, learning } = await DATA.unit(unitId);
+  const h = { L, learning, taught: new Set(), rows: [], refl: [], weak: [], evalBy: {}, suggestions: [] };
+  if (!connected()) return h;
+  const [prog, refl, weak] = await Promise.all([API.teacher('getProgress'), API.teacher('getReflections', { '單元': L['課程名稱'] }), API.teacher('getWeak')]);
+  h.rows = prog.filter((r) => r['單元'] === L['課程名稱'] && r['狀態'] === '已教');
+  h.rows.forEach((r) => h.taught.add(Number(r['節'])));
+  h.refl = refl; h.weak = weak;
+  for (const n of h.taught) { try { h.evalBy[n] = await API.teacher('assessSummary', { '單元': L['課程名稱'], '節': n }); } catch (e) { /* 該節沒有資料 */ } }
+  const sorted = [...h.taught].sort((a, b) => a - b);
+  // a 老師不熟悉
+  h.weak.filter((w) => w['狀態'] !== '已熟').forEach((w) => h.suggestions.push({ '內容': w['內容'], '原因': `老師不熟悉（${w['來源'] || ''}，已練 ${w['次數']} 次）`, '類型': '老師' }));
+  // b 課後省思
+  h.refl.filter((r) => r['下次複習']).forEach((r) => h.suggestions.push({ '內容': r['下次複習'], '原因': `第 ${r['節']} 節課後省思`, '類型': '省思' }));
+  // c 學生評量偏低
+  Object.entries(h.evalBy).forEach(([n, ev]) => Object.entries(ev.byItem || {}).forEach(([k, g]) => {
+    const t = (g[1] || 0) + (g[2] || 0) + (g[3] || 0);
+    if (t >= 3 && (g[1] || 0) / t >= 0.4) h.suggestions.push({ '內容': k.replace('｜', ' · '), '原因': `第 ${n} 節「努力中」佔 ${Math.round((g[1] || 0) / t * 100)}%（${t} 筆）`, '類型': '學生' });
+  }));
+  // d 螺旋缺口：學過但最近都沒再出現
+  // 只看本單元的新字詞與新句型（單節專用的口令如暖身用語不算），最多列 6 項、缺口最久的優先
+  const gaps = [];
+  learning['項目'].filter((i) => !i['先備'] && i['新'] && h.taught.has(i['首次節']) && (i['類型'] === '新字詞' || /\s/.test(i['內容']))).forEach((i) => {
+    const seen = i['出現節'].filter((n) => h.taught.has(n)); const last = Math.max(...seen);
+    const gap = sorted.filter((n) => n > last).length;
+    if (gap >= 2) gaps.push({ '內容': i['內容'], '原因': `最近 ${gap} 節都沒出現（最後在第 ${last} 節）`, '類型': '螺旋', gap });
+  });
+  gaps.sort((a, b) => b.gap - a.gap).slice(0, 6).forEach((g) => h.suggestions.push(g));
+  return h;
+}
+
+Pages.records = async function (tab) {
+  tab = tab || '';
+  const units = await DATA.units(); const unitId = units[0].id;
+  if (tab === 'eval') return recEval(unitId);
+  if (tab === 'reflect') return recReflect(unitId);
+  const h = await buildHistory(unitId); const L = h.L; const items = h.learning['項目'];
+  const n = L['節次'].length, tcount = h.taught.size;
+  const learned = items.filter((i) => h.taught.has(i['首次節']));
+  const cells = (i) => L['節次'].map((s) => { const on = i['出現節'].includes(s['節']), td = h.taught.has(s['節']); return `<td>${on ? `<span class="dot ${td ? '' : 'hollow'}"></span>` : ''}</td>`; }).join('');
+  const table = (list) => `<div class="scroll"><table class="matrix"><thead><tr><th>內容</th>${L['節次'].map((s) => `<th>${s['節']}</th>`).join('')}</tr></thead><tbody>${list.map((i) =>
+    `<tr><td>${connected() && h.taught.has(i['首次節']) ? '✅ ' : ''}${esc(i['內容'])}${i['新'] ? ' <span class="chip new">新</span>' : ''}</td>${cells(i)}</tr>`).join('')}</tbody></table></div>`;
+  const by = (t) => items.filter((i) => i['類型'] === t && !(t === '英語用語' && i['先備'] && !i['新']));
+  const sug = h.suggestions;
+  const sugText = sug.length ? '【建議複習項目】\n' + sug.map((s) => `- ${s['內容']}（${s['原因']}）`).join('\n') : '';
+  const timeline = [...h.taught].sort((a, b) => b - a).map((no) => {
+    const s = L['節次'].find((x) => x['節'] === no);
+    const r = h.rows.filter((x) => Number(x['節']) === no).slice(-1)[0];
+    const rf = h.refl.filter((x) => Number(x['節']) === no).slice(-1)[0];
+    const newItems = items.filter((i) => i['首次節'] === no && i['類型'] !== '目標' && !i['先備']);
+    const ev = h.evalBy[no];
+    return `<div class="card"><div class="row"><b>第 ${no} 節　${esc(s['主題'])}</b><span class="small muted">${esc(String(r ? r['日期'] : '').slice(0, 10))}</span></div>
+      ${newItems.length ? `<div class="small muted">這節新出現</div>${chips(newItems.map((i) => i['內容']), 'say')}` : ''}
+      ${rf ? `<div class="small" style="margin-top:6px">👍 ${esc(rf['做得好'])}　🔧 ${esc(rf['要調整'])}</div>` : '<div class="small muted" style="margin-top:6px">還沒寫課後省思。<a href="#/records/reflect">去寫</a></div>'}
+      ${ev && ev.total ? `<div style="margin-top:8px">${evalBars(ev.byItem)}</div>` : ''}</div>`;
+  }).join('');
   return {
-    html: `<h1>學習紀錄</h1>
+    html: `<h1>學習紀錄</h1>${recTabs('')}
+    <h2 style="margin-top:0">${esc(L['單元名稱'])}</h2>
+    ${connected() ? `<div class="grid"><div class="card"><div class="small muted">已教進度</div><h2 style="margin:4px 0">${tcount} / ${n} 節</h2></div>
+      <div class="card"><div class="small muted">已學項目</div><h2 style="margin:4px 0">${learned.length} / ${items.length}</h2></div>
+      <div class="card"><div class="small muted">待複習建議</div><h2 style="margin:4px 0">${sug.length} 項</h2></div></div>` : `<div class="notice">這裡先顯示本單元的「學習項目庫」。連線後端並輸入老師密碼後，會標出已學會的項目與複習建議。<a href="#/settings">前往設定</a></div>`}
+    ${connected() ? `<h2>建議複習</h2>${sug.length ? `<div class="card">${sug.map((s) => `<div style="margin-bottom:8px"><span class="chip ${s['類型'] === '老師' ? 'new' : ''}">${esc(s['類型'])}</span> <b>${esc(s['內容'])}</b><div class="small muted">${esc(s['原因'])}</div></div>`).join('')}
+      <button class="btn sm ghost noprint" id="cp">複製給備課教練／下一個單元</button></div>` : '<div class="card muted">目前沒有需要特別複習的項目。</div>'}` : ''}
+    <h2>學習項目庫</h2><p class="small muted">實心圓點＝該節有出現；空心＝尚未教到${connected() ? '；✅＝已教到的項目' : ''}。這份清單也是下一個單元「螺旋複習」的素材。</p>
+    <div class="card"><h3>教學目標（動作、策略、規則）</h3>${table(by('目標'))}</div>
+    <div class="card"><h3>新字詞</h3>${table(by('新字詞'))}</div>
+    <div class="card"><h3>英語用語（教案中的口令、問答與鼓勵）</h3>${table(by('英語用語'))}</div>
+    ${connected() && tcount ? `<h2>教學歷程</h2>${timeline}` : ''}`,
+    after: () => { const b = $('#cp'); if (b) b.onclick = () => copyText(sugText, '已複製，可貼到教練對話開頭'); }
+  };
+};
+
+async function recEval(unitId) {
+  const { lesson: L } = await DATA.unit(unitId);
+  if (!connected()) return { html: `<h1>學習紀錄</h1>${recTabs('eval')}${gate()}` };
+  return {
+    html: `<h1>學習紀錄</h1>${recTabs('eval')}
     <div class="row"><label style="margin:0">節次</label><select id="sn"><option value="">全部</option>${L['節次'].map((s) => `<option value="${s['節']}">第 ${s['節']} 節</option>`).join('')}</select><button class="btn sm" id="load">載入評量</button></div>
-    <div id="sum" class="card muted">按「載入評量」查看 iPad 自評與同儕觀察。</div>
-    <h2>課後省思</h2><div class="card">
-      <div class="row"><select id="rn">${L['節次'].map((s) => `<option value="${s['節']}">第 ${s['節']} 節</option>`).join('')}</select></div>
-      <label>做得好的</label><input id="r1" style="width:100%"><label>要調整的</label><input id="r2" style="width:100%"><label>下次要複習</label><input id="r3" style="width:100%">
-      <div style="margin-top:10px"><button class="btn" id="rs">儲存省思</button></div></div>
-    <div id="refl"></div>`,
-    after: async () => {
-      const unit = L['課程名稱'];
-      const showRefl = (rows) => { $('#refl').innerHTML = rows.length ? `<div class="card">${rows.slice().reverse().map((r) => `<div style="margin-bottom:10px"><b>第 ${esc(r['節'])} 節</b> <span class="small muted">${esc(String(r['日期']).slice(0, 10))}</span><div class="small">👍 ${esc(r['做得好'])}</div><div class="small">🔧 ${esc(r['要調整'])}</div><div class="small">🔁 ${esc(r['下次複習'])}</div></div>`).join('')}</div>` : ''; };
-      try { showRefl(await API.teacher('getReflections', { '單元': unit })); } catch (e) { /* 忽略 */ }
+    <div id="sum" class="card muted">按「載入評量」查看 iPad 自評與同儕觀察。</div><div id="stu"></div>`,
+    after: () => {
       $('#load').onclick = async () => {
         $('#sum').textContent = '載入中…';
         try {
-          const r = await API.teacher('assessSummary', { '單元': unit, '節': $('#sn').value || undefined });
-          const items = Object.entries(r.byItem);
-          $('#sum').innerHTML = items.length ? `<div class="small muted">共 ${r.total} 筆</div>` + items.map(([k, g]) => { const t = (g[1] || 0) + (g[2] || 0) + (g[3] || 0) || 1;
-            return `<div style="margin:10px 0"><b>${esc(k.replace('｜', ' · '))}</b><div class="bar"><i class="g3" style="width:${g[3] / t * 100}%"></i><i class="g2" style="width:${g[2] / t * 100}%"></i><i class="g1" style="width:${g[1] / t * 100}%"></i></div>
-            <div class="small muted">優異 ${g[3] || 0}　達成 ${g[2] || 0}　努力中 ${g[1] || 0}</div></div>`; }).join('') : '還沒有評量資料。';
+          const r = await API.teacher('assessSummary', { '單元': L['課程名稱'], '節': $('#sn').value || undefined });
+          $('#sum').innerHTML = r.total ? `<div class="small muted">共 ${r.total} 筆（綠＝優異、黃＝達成、紅＝努力中）</div>` + evalBars(r.byItem) : '還沒有評量資料。';
+          const st = Object.entries(r.byStudent || {}).map(([k, v]) => { const [no, type, item] = k.split('｜'); return { no: +no, type, item, avg: v.sum / v.n, n: v.n }; }).sort((a, b) => a.no - b.no);
+          $('#stu').innerHTML = st.length ? `<h2>每位學生</h2><div class="card scroll"><table><thead><tr><th>座號</th><th>類型</th><th>項目</th><th>平均（1–3）</th><th>筆數</th></tr></thead><tbody>${st.map((s) => `<tr><td>${s.no}</td><td>${esc(s.type)}</td><td>${esc(s.item)}</td><td>${s.avg.toFixed(1)}</td><td>${s.n}</td></tr>`).join('')}</tbody></table></div><p class="small muted">自評＝學生自己的感受；同儕＝夥伴對他的觀察。兩者落差大時值得個別聊聊。這是形成性資料，不作為成績。</p>` : '';
         } catch (e) { $('#sum').textContent = '讀取失敗：' + e.message; }
       };
-      $('#rs').onclick = async () => { try { showRefl(await API.teacher('saveReflection', { '單元': unit, '節': $('#rn').value, '做得好': $('#r1').value, '要調整': $('#r2').value, '下次複習': $('#r3').value })); ['#r1', '#r2', '#r3'].forEach((s) => ($(s).value = '')); toast('已儲存'); } catch (e) { toast(e.message); } };
     }
   };
-};
+}
+
+async function recReflect(unitId) {
+  const { lesson: L } = await DATA.unit(unitId);
+  if (!connected()) return { html: `<h1>學習紀錄</h1>${recTabs('reflect')}${gate()}` };
+  return {
+    html: `<h1>學習紀錄</h1>${recTabs('reflect')}<div class="card">
+      <div class="row"><select id="rn">${L['節次'].map((s) => `<option value="${s['節']}">第 ${s['節']} 節　${esc(s['主題'])}</option>`).join('')}</select></div>
+      <label>做得好的</label><input id="r1" style="width:100%"><label>要調整的</label><input id="r2" style="width:100%"><label>下次要複習</label><input id="r3" style="width:100%">
+      <div style="margin-top:10px"><button class="btn" id="rs">儲存省思</button></div></div><div id="refl"></div>`,
+    after: async () => {
+      const unit = L['課程名稱'];
+      const show = (rows) => { $('#refl').innerHTML = rows.length ? `<div class="card">${rows.slice().reverse().map((r) => `<div style="margin-bottom:10px"><b>第 ${esc(r['節'])} 節</b> <span class="small muted">${esc(String(r['日期']).slice(0, 10))}</span><div class="small">👍 ${esc(r['做得好'])}</div><div class="small">🔧 ${esc(r['要調整'])}</div><div class="small">🔁 ${esc(r['下次複習'])}</div></div>`).join('')}</div>` : ''; };
+      try { show(await API.teacher('getReflections', { '單元': unit })); } catch (e) { /* 忽略 */ }
+      $('#rs').onclick = async () => { try { show(await API.teacher('saveReflection', { '單元': unit, '節': $('#rn').value, '做得好': $('#r1').value, '要調整': $('#r2').value, '下次複習': $('#r3').value })); ['#r1', '#r2', '#r3'].forEach((x) => ($(x).value = '')); toast('已儲存'); } catch (e) { toast(e.message); } };
+    }
+  };
+}
 
 /* ---------- 設定 ---------- */
 Pages.settings = async function () {

@@ -12,8 +12,8 @@ const DATA = {
     const us = await this.units();
     const u = us.find((x) => x.id === id);
     if (!u) throw new Error('找不到單元：' + id);
-    const [lesson, dialogue] = await Promise.all([this.json(u.lesson), u.dialogue ? this.json(u.dialogue) : null]);
-    return { id, lesson, dialogue };
+    const [lesson, dialogue, learning] = await Promise.all([this.json(u.lesson), u.dialogue ? this.json(u.dialogue) : null, u.learning ? this.json(u.learning) : { '項目': [] }]);
+    return { id, lesson, dialogue, learning };
   },
   curriculum() { return this.json('data/curriculum.json'); },
   rules() { return this.json('data/素養對應規則.json'); },
