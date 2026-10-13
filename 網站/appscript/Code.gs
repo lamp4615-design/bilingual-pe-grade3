@@ -6,23 +6,22 @@
  *  - 學生（iPad）：用「班級代碼 CLASS_CODE」呼叫 roster、submitAssessment
  *  - 老師：用「老師密碼 TEACHER_PIN」呼叫其餘所有功能
  * 祕密設定放在「指令碼屬性」，不要寫進程式或 GitHub：
- *  CLASS_CODE、TEACHER_PIN、ANTHROPIC_API_KEY、（選填）MODEL
+ *  CLASS_CODE、TEACHER_PIN
+ * 備課教練改用 Claude 專案（不經過本後端），所以不需要 API Key。
  */
 
 const SHEET = {
-  roster: '學生名單', assess: '學生評量', practice: '練習紀錄', weak: '不熟悉清單',
+  roster: '學生名單', assess: '學生評量', weak: '不熟悉清單',
   taught: '教學進度', reflect: '教學省思', review: '複習排程'
 };
 const HEADERS = {
   '學生名單': ['座號', '隊', '暱稱'],
   '學生評量': ['時間', '單元', '節', '類型', '評量者座號', '評量者隊', '被評者座號', '項目', '等第', '鼓勵語'],
-  '練習紀錄': ['時間', '單元', '節', '回合', '老師說', '教練與學生回應'],
   '不熟悉清單': ['id', '類型', '內容', '來源', '次數', '狀態', '最近練習', '備註'],
   '教學進度': ['日期', '單元', '節', '狀態', '備註'],
   '教學省思': ['日期', '單元', '節', '做得好', '要調整', '下次複習'],
   '複習排程': ['單元', '節', '項目', '下次複習日', '次數']
 };
-const DEFAULT_MODEL = 'claude-sonnet-5-5';
 
 /** 第一次使用：在 Apps Script 編輯器執行一次 setup()，會建立所有工作表與表頭。 */
 function setup() {
@@ -44,7 +43,7 @@ function setup() {
     const d = ss.getSheetByName(n);
     if (d && ss.getSheets().length > 1 && d.getLastRow() === 0) ss.deleteSheet(d);
   });
-  Logger.log('完成。請到「專案設定 → 指令碼屬性」新增 CLASS_CODE、TEACHER_PIN、ANTHROPIC_API_KEY。');
+  Logger.log('完成。請到「專案設定 → 指令碼屬性」新增 CLASS_CODE、TEACHER_PIN。');
 }
 
 function doGet() { return out({ ok: true, service: 'bilingual-pe-api', time: new Date().toISOString() }); }
@@ -58,11 +57,11 @@ function doPost(e) {
     const teacherOK = !!req.pin && req.pin === props.getProperty('TEACHER_PIN');
     const studentActions = { roster: roster_, submitAssessment: submitAssessment_ };
     const teacherActions = {
-      assessSummary: assessSummary_, coach: coach_, saveWeak: saveWeak_, getWeak: getWeak_,
+      assessSummary: assessSummary_, saveWeak: saveWeak_, getWeak: getWeak_,
       markTaught: markTaught_, getProgress: getProgress_, saveReflection: saveReflection_,
-      getReflections: getReflections_, saveRoster: saveRoster_, getPractice: getPractice_
+      getReflections: getReflections_, saveRoster: saveRoster_
     };
-    if (req.action === 'ping') return out({ ok: true, role: teacherOK ? 'teacher' : studentOK ? 'student' : 'none' });
+    if (req.action === 'ping') return out({ ok: true, data: { role: teacherOK ? 'teacher' : studentOK ? 'student' : 'none' } });
     if (studentActions[req.action] && (studentOK || teacherOK)) return out({ ok: true, data: studentActions[req.action](p) });
     if (teacherActions[req.action] && teacherOK) return out({ ok: true, data: teacherActions[req.action](p) });
     return out({ ok: false, error: '沒有權限或未知的動作：' + req.action });
@@ -121,38 +120,6 @@ function assessSummary_(p) {
   return { total: rows.length, byItem: byItem, byStudent: byStudent, recent: rows.slice(-30) };
 }
 
-/* ---------- 老師：AI 備課教練 ---------- */
-function coach_(p) {
-  const props = PropertiesService.getScriptProperties();
-  const key = props.getProperty('ANTHROPIC_API_KEY');
-  if (!key) throw new Error('尚未設定 ANTHROPIC_API_KEY');
-  const model = props.getProperty('MODEL') || DEFAULT_MODEL;
-  const messages = (p.messages || []).slice(-24).map(function (m) {
-    return { role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content).slice(0, 4000) };
-  });
-  if (!messages.length) throw new Error('沒有對話內容');
-  const res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
-    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    payload: JSON.stringify({
-      model: model, max_tokens: Math.min(Number(p.maxTokens) || 700, 1200),
-      system: String(p.system || '').slice(0, 20000), messages: messages
-    })
-  });
-  const body = JSON.parse(res.getContentText());
-  if (res.getResponseCode() !== 200) throw new Error('AI 服務錯誤：' + ((body.error && body.error.message) || res.getResponseCode()));
-  const text = body.content.map(function (c) { return c.text || ''; }).join('');
-  const last = messages[messages.length - 1];
-  append_(SHEET.practice, {
-    時間: now_(), 單元: p.單元, 節: p.節, 回合: p.回合,
-    老師說: last.content.slice(0, 2000), 教練與學生回應: text.slice(0, 4000)
-  });
-  return { reply: text };
-}
-function getPractice_(p) {
-  return rows_(SHEET.practice).filter(function (r) { return !p.節 || Number(r.節) === Number(p.節); }).slice(-100);
-}
-
 /* ---------- 老師：不熟悉清單 ---------- */
 function getWeak_() { return rows_(SHEET.weak); }
 function saveWeak_(p) {
@@ -166,8 +133,10 @@ function saveWeak_(p) {
         if (data[i][h.indexOf('內容')] === it.內容 && data[i][h.indexOf('來源')] === it.來源) { idx = i; break; }
       }
       if (idx > 0) {
-        sh.getRange(idx + 1, h.indexOf('次數') + 1).setValue(Number(data[idx][h.indexOf('次數')] || 0) + 1);
-        sh.getRange(idx + 1, h.indexOf('最近練習') + 1).setValue(today_());
+        if (!it.只更新狀態) {
+          sh.getRange(idx + 1, h.indexOf('次數') + 1).setValue(Number(data[idx][h.indexOf('次數')] || 0) + 1);
+          sh.getRange(idx + 1, h.indexOf('最近練習') + 1).setValue(today_());
+        }
         sh.getRange(idx + 1, h.indexOf('狀態') + 1).setValue(it.狀態 || data[idx][h.indexOf('狀態')]);
         if (it.備註) sh.getRange(idx + 1, h.indexOf('備註') + 1).setValue(it.備註);
       } else {
