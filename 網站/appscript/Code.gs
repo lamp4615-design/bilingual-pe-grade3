@@ -2,17 +2,16 @@
  * 雙語體育共學站 — 後端（Google Apps Script）
  * 綁定在一份 Google 試算表上使用。部署步驟見 README.md。
  *
- * 角色：
- *  - 學生（iPad）：用「班級代碼 CLASS_CODE」呼叫 roster、submitAssessment
- *  - 老師：用「老師密碼 TEACHER_PIN」呼叫其餘所有功能
- * 祕密設定放在「指令碼屬性」，不要寫進程式或 GitHub：
- *  CLASS_CODE、TEACHER_PIN
- * 備課教練改用 Claude 專案（不經過本後端），所以不需要 API Key。
+ * 兩種使用者、兩個部署（同一份程式）：
+ *  - 學生（iPad）：部署成「所有人」。網站用「班級代碼 CLASS_CODE」呼叫 roster、submitAssessment。
+ *  - 老師：部署成「只有我自己」。直接開這個網址就是「教師後台」（Console.html），
+ *    身分由 Google 登入判斷，不需要另外設密碼。
+ * 祕密設定只有 CLASS_CODE，放在「指令碼屬性」，不要寫進程式或 GitHub。
  */
 
 const SHEET = {
   roster: '學生名單', assess: '學生評量', weak: '不熟悉清單',
-  taught: '教學進度', reflect: '教學省思', review: '複習排程', scores: '體育成績'
+  taught: '教學進度', reflect: '教學省思', review: '複習排程', scores: '體育成績', groups: '分組紀錄'
 };
 const CLASSES = ['甲班', '乙班'];
 const HEADERS = {
@@ -22,7 +21,8 @@ const HEADERS = {
   '教學進度': ['日期', '單元', '節', '狀態', '備註'],
   '教學省思': ['日期', '單元', '節', '做得好', '要調整', '下次複習'],
   '複習排程': ['單元', '節', '項目', '下次複習日', '次數'],
-  '體育成績': ['日期', '班級', '項目', '座號', '次別', '成績', '單位', '備註', '登錄時間']
+  '體育成績': ['日期', '班級', '項目', '座號', '次別', '成績', '單位', '備註', '登錄時間'],
+  '分組紀錄': ['分組ID', '建立時間', '名稱', '日期', '策略', '參數', '備註', '組別', '班級', '座號', '棒次', '成績']
 };
 
 /** 第一次使用：在 Apps Script 編輯器執行一次 setup()，會建立所有工作表與表頭。 */
@@ -48,6 +48,8 @@ function setup() {
       r.setValues(v.map(function (x) { return [x[0] || CLASSES[0]]; }));
     }
   });
+  ss.getSheetByName(SHEET.groups).getRange('B:B').setNumberFormat('@');
+  ss.getSheetByName(SHEET.groups).getRange('D:D').setNumberFormat('@');
   const roster = ss.getSheetByName(SHEET.roster);
   if (roster.getLastRow() === 1) {          // 預設每班 18 人、6 隊、每隊 3 人；之後用網站「設定」頁匯入真正的座號名單
     const rows = [];
@@ -58,28 +60,33 @@ function setup() {
     const d = ss.getSheetByName(n);
     if (d && ss.getSheets().length > 1 && d.getLastRow() === 0) ss.deleteSheet(d);
   });
-  Logger.log('完成。請到「專案設定 → 指令碼屬性」新增 CLASS_CODE、TEACHER_PIN。');
+  Logger.log('完成。請到「專案設定 → 指令碼屬性」新增 CLASS_CODE（學生用的班級代碼）。');
 }
 
-function doGet() { return out({ ok: true, service: 'bilingual-pe-api', time: new Date().toISOString() }); }
+/** 只有試算表擁有者（部署時「只有我自己」開啟）才會看到教師後台；其他人只看到服務狀態。 */
+function isOwner_() {
+  const me = Session.getActiveUser().getEmail();
+  return !!me && me === Session.getEffectiveUser().getEmail();
+}
+function assertOwner_() { if (!isOwner_()) throw new Error('只有試算表擁有者可以使用教師後台'); }
 
+function doGet() {
+  if (isOwner_()) {
+    return HtmlService.createHtmlOutputFromFile('Console').setTitle('教師後台')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  }
+  return out({ ok: true, service: 'bilingual-pe-api', time: new Date().toISOString() });
+}
+
+/** 學生端 API：只開放取名單與送出自評／互評。老師功能全在教師後台（google.script.run），不經過這裡。 */
 function doPost(e) {
   try {
     const req = JSON.parse(e.postData.contents);
     const p = req.payload || {};
-    const props = PropertiesService.getScriptProperties();
-    const studentOK = !!req.classCode && req.classCode === props.getProperty('CLASS_CODE');
-    const teacherOK = !!req.pin && req.pin === props.getProperty('TEACHER_PIN');
+    const studentOK = !!req.classCode && req.classCode === PropertiesService.getScriptProperties().getProperty('CLASS_CODE');
     const studentActions = { roster: roster_, submitAssessment: submitAssessment_ };
-    const teacherActions = {
-      assessSummary: assessSummary_, saveWeak: saveWeak_, getWeak: getWeak_,
-      markTaught: markTaught_, getProgress: getProgress_, saveReflection: saveReflection_,
-      getReflections: getReflections_, saveRoster: saveRoster_,
-      saveScores: saveScores_, getScores: getScores_
-    };
-    if (req.action === 'ping') return out({ ok: true, data: { role: teacherOK ? 'teacher' : studentOK ? 'student' : 'none' } });
-    if (studentActions[req.action] && (studentOK || teacherOK)) return out({ ok: true, data: studentActions[req.action](p) });
-    if (teacherActions[req.action] && teacherOK) return out({ ok: true, data: teacherActions[req.action](p) });
+    if (req.action === 'ping') return out({ ok: true, data: { role: studentOK ? 'student' : 'none' } });
+    if (studentActions[req.action] && studentOK) return out({ ok: true, data: studentActions[req.action](p) });
     return out({ ok: false, error: '沒有權限或未知的動作：' + req.action });
   } catch (err) {
     return out({ ok: false, error: String(err) });
@@ -115,6 +122,7 @@ function submitAssessment_(p) {
   return { saved: true };
 }
 
+/* 以下「老師：…」的函式是舊版（需密碼）網站用的資料層；網站已不再呼叫，待移到教師後台（Console.html）時再接上 tc_ 函式。 */
 /* ---------- 老師：評量 ---------- */
 function assessSummary_(p) {
   const rows = rows_(SHEET.assess).filter(function (r) {
@@ -204,7 +212,8 @@ function saveRoster_(p) {
 /* 同一天、同班級、同項目、同座號、同次別只留一筆（重送＝更正）。日期以純文字存，避免試算表自動轉成日期。 */
 function dateStr_(v) { return v instanceof Date ? Utilities.formatDate(v, 'Asia/Taipei', 'yyyy-MM-dd') : String(v).slice(0, 10); }
 function scoreRows_() {
-  return rows_(SHEET.scores).map(function (r) {
+  return rows_(SHEET.scores).map(function (r) {            // Date 物件無法傳給 google.script.run，統一轉成文字
+    Object.keys(r).forEach(function (k) { r[k] = plain_(r[k]); });
     r['日期'] = dateStr_(r['日期']);
     return r;
   });
@@ -234,4 +243,52 @@ function saveScores_(p) {
     });
   } finally { lock.releaseLock(); }
   return getScores_({ '項目': items.length ? items[0].項目 : '', '班級': items.length ? items[0].班級 : '' });
+}
+
+/* ---------- 教師後台（Console.html 以 google.script.run 呼叫；每個都先確認是擁有者） ---------- */
+function tc_init() { assertOwner_(); return { roster: roster_(), classes: CLASSES }; }
+function tc_getScores(item) { assertOwner_(); return getScores_({ '項目': item }); }
+function tc_saveScores(items) { assertOwner_(); return saveScores_({ items: items }); }
+function tc_saveRoster(cls, roster) { assertOwner_(); return saveRoster_({ '班級': cls, roster: roster }); }
+function tc_assessSummary(cls) { assertOwner_(); const r = assessSummary_({ '班級': cls }); delete r.recent; return r; }
+
+/* 分組紀錄：一次分組存成多列（每位學生一列），用「分組ID」串起來，下一堂課可以直接叫出來沿用。 */
+function plain_(v) { return v instanceof Date ? Utilities.formatDate(v, 'Asia/Taipei', 'yyyy-MM-dd HH:mm:ss') : v; }
+function tc_getGroupings() {
+  assertOwner_();
+  const by = {}, order = [];
+  rows_(SHEET.groups).forEach(function (r) {
+    const id = r['分組ID'];
+    if (!by[id]) {
+      by[id] = { id: id, 建立時間: String(plain_(r['建立時間'])), 名稱: r['名稱'], 日期: String(plain_(r['日期'])).slice(0, 10),
+        策略: r['策略'], 參數: r['參數'], 備註: r['備註'], members: [] };
+      order.push(id);
+    }
+    by[id].members.push({ 組別: Number(r['組別']), 班級: r['班級'], 座號: Number(r['座號']), 棒次: r['棒次'] === '' ? '' : Number(r['棒次']), 成績: r['成績'] === '' ? '' : Number(r['成績']) });
+  });
+  return order.reverse().slice(0, 30).map(function (id) { return by[id]; });
+}
+function tc_saveGrouping(g) {
+  assertOwner_();
+  if (!g || !g.members || !g.members.length) throw new Error('沒有任何分組可以儲存');
+  const lock = LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    const sh = sheet_(SHEET.groups), h = HEADERS[SHEET.groups];
+    const id = 'G' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMddHHmmss');
+    const rows = g.members.map(function (m) {
+      return [id, now_(), String(g.名稱 || '').slice(0, 40), String(g.日期 || today_()), String(g.策略 || ''), String(g.參數 || ''), String(g.備註 || '').slice(0, 100),
+        Number(m.組別), String(m.班級), Number(m.座號), m.棒次 === '' || m.棒次 == null ? '' : Number(m.棒次), m.成績 === '' || m.成績 == null ? '' : Number(m.成績)];
+    });
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, h.length).setValues(rows);
+  } finally { lock.releaseLock(); }
+  return tc_getGroupings();
+}
+function tc_deleteGrouping(id) {
+  assertOwner_();
+  const lock = LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    const sh = sheet_(SHEET.groups), v = sh.getDataRange().getValues();
+    for (let i = v.length - 1; i >= 1; i--) if (v[i][0] === id) sh.deleteRow(i + 1);
+  } finally { lock.releaseLock(); }
+  return tc_getGroupings();
 }

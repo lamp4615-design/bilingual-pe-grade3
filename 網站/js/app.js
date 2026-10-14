@@ -34,3 +34,6 @@ async function route() {
 window.addEventListener('hashchange', route);
 window.addEventListener('online', () => Eval.flush());
 route();
+
+// 有設定教師後台網址時，導覽列多一個連結（另開分頁；登入的是 Google 帳號，不是網站密碼）
+(() => { const u = API.consoleUrl(); if (!u) return; const a = document.createElement('a'); a.href = u; a.target = '_blank'; a.rel = 'noopener'; a.textContent = '教師後台'; $('#nav').appendChild(a); })();
