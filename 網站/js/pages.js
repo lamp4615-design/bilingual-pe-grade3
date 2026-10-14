@@ -241,7 +241,7 @@ Pages.weak = async function () {
 
 /* ---------- 學習紀錄（老師）：歷程總覽｜評量｜省思 ---------- */
 function recTabs(cur) {
-  return `<div class="tabs">${[['', '歷程總覽'], ['eval', '學生評量'], ['reflect', '課後省思']].map(([k, n]) => `<a class="${cur === k ? 'on' : ''}" href="#/records${k ? '/' + k : ''}">${n}</a>`).join('')}</div>`;
+  return `<div class="tabs">${[['', '歷程總覽'], ['eval', '學生評量'], ['reflect', '課後省思'], ['run', '跑步成績']].map(([k, n]) => `<a class="${cur === k ? 'on' : ''}" href="#/records${k ? '/' + k : ''}">${n}</a>`).join('')}</div>`;
 }
 const connected = () => API.enabled() && !!API.pin();
 const gate = () => `<div class="notice warn">這個分頁需要先連線後端並輸入老師密碼。<a href="#/settings">前往設定</a></div>`;
@@ -288,6 +288,7 @@ Pages.records = async function (tab) {
   const units = await DATA.units(); const unitId = units[0].id;
   if (tab === 'eval') return recEval(unitId);
   if (tab === 'reflect') return recReflect(unitId);
+  if (tab === 'run') return recRun();
   const h = await buildHistory(unitId); const L = h.L; const items = h.learning['項目'];
   const n = L['節次'].length, tcount = h.taught.size;
   const learned = items.filter((i) => h.taught.has(i['首次節']));
@@ -338,8 +339,8 @@ async function recEval(unitId) {
         try {
           const r = await API.teacher('assessSummary', { '單元': L['課程名稱'], '節': $('#sn').value || undefined });
           $('#sum').innerHTML = r.total ? `<div class="small muted">共 ${r.total} 筆（綠＝優異、黃＝達成、紅＝努力中）</div>` + evalBars(r.byItem) : '還沒有評量資料。';
-          const st = Object.entries(r.byStudent || {}).map(([k, v]) => { const [no, type, item] = k.split('｜'); return { no: +no, type, item, avg: v.sum / v.n, n: v.n }; }).sort((a, b) => a.no - b.no);
-          $('#stu').innerHTML = st.length ? `<h2>每位學生</h2><div class="card scroll"><table><thead><tr><th>座號</th><th>類型</th><th>項目</th><th>平均（1–3）</th><th>筆數</th></tr></thead><tbody>${st.map((s) => `<tr><td>${s.no}</td><td>${esc(s.type)}</td><td>${esc(s.item)}</td><td>${s.avg.toFixed(1)}</td><td>${s.n}</td></tr>`).join('')}</tbody></table></div><p class="small muted">自評＝學生自己的感受；同儕＝夥伴對他的觀察。兩者落差大時值得個別聊聊。這是形成性資料，不作為成績。</p>` : '';
+          const st = Object.entries(r.byStudent || {}).map(([k, v]) => { const [cls, no, type, item] = k.split('｜'); return { cls, no: +no, type, item, avg: v.sum / v.n, n: v.n }; }).sort((a, b) => a.cls.localeCompare(b.cls) || a.no - b.no);
+          $('#stu').innerHTML = st.length ? `<h2>每位學生</h2><div class="card scroll"><table><thead><tr><th>班級</th><th>座號</th><th>類型</th><th>項目</th><th>平均（1–3）</th><th>筆數</th></tr></thead><tbody>${st.map((s) => `<tr><td>${esc(s.cls)}</td><td>${s.no}</td><td>${esc(s.type)}</td><td>${esc(s.item)}</td><td>${s.avg.toFixed(1)}</td><td>${s.n}</td></tr>`).join('')}</tbody></table></div><p class="small muted">自評＝學生自己的感受；同儕＝夥伴對他的觀察。兩者落差大時值得個別聊聊。這是形成性資料，不作為成績。</p>` : '';
         } catch (e) { $('#sum').textContent = '讀取失敗：' + e.message; }
       };
     }
@@ -363,6 +364,88 @@ async function recReflect(unitId) {
   };
 }
 
+/* ---------- 體育成績：100 公尺跑（秒數，越小越快）。只記座號，不記姓名 ---------- */
+const RUN_ITEM = '100公尺跑';
+const CLASSES = ['甲班', '乙班'];
+const clsOf = (r) => r['班級'] || CLASSES[0];
+const fmtSec = (v) => (v == null ? '—' : Number(v).toFixed(2));
+const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+async function recRun() {
+  if (!connected()) return { html: `<h1>學習紀錄</h1>${recTabs('run')}${gate()}` };
+  return {
+    html: `<h1>學習紀錄</h1>${recTabs('run')}
+    <div class="card"><div class="row">
+      <label style="margin:0">班級</label><select id="rc">${CLASSES.map((c) => `<option>${c}</option>`).join('')}</select>
+      <label style="margin:0">日期</label><input type="date" id="rd" value="${todayStr()}">
+      <label style="margin:0">次別</label><select id="rt"><option value="1">第 1 次</option><option value="2">第 2 次</option><option value="3">第 3 次</option></select>
+      <span class="small muted">${esc(RUN_ITEM)}（單位：秒，可到小數第 2 位）</span></div>
+      <div id="rtable" class="scroll" style="margin-top:10px">載入中…</div>
+      <div class="row" style="margin-top:10px"><button class="btn" id="rsave">儲存這一次的成績</button><span class="small muted" id="rmsg"></span></div>
+      <p class="small muted">空白＝沒跑（缺席或未測），不會寫入。要更正就直接改數字再儲存，同一天同一次會覆蓋原本那筆。</p></div>
+    <div id="rsum"></div>`,
+    after: async () => {
+      let roster = [], scores = [];
+      const sel = () => ({ c: $('#rc').value, d: $('#rd').value, t: Number($('#rt').value) });
+      const rosterOf = (c) => roster.filter((r) => clsOf(r) === c);
+      const render = () => {
+        const { c, d, t } = sel();
+        const cur = {}; scores.filter((r) => r['班級'] === c && r['日期'] === d && Number(r['次別']) === t).forEach((r) => { cur[r['座號']] = r['成績']; });
+        $('#rtable').innerHTML = `<table><thead><tr><th>座號</th><th>隊</th><th>秒數</th></tr></thead><tbody>${rosterOf(c).map((r) =>
+          `<tr><td>${r['座號']}</td><td>${r['隊']}</td><td><input class="sec" data-no="${r['座號']}" inputmode="decimal" style="width:7em" value="${cur[r['座號']] != null ? esc(cur[r['座號']]) : ''}"></td></tr>`).join('')}</tbody></table>`;
+        summary();
+      };
+      // 每人每天取最快的一次；與「更早日期的最佳」比較，正數＝進步（變快）
+      const summary = () => {
+        const { c, d } = sel();
+        const best = {}; // best[日期][座號]，只看這一班
+        scores.filter((r) => r['班級'] === c).forEach((r) => { const dd = r['日期'], n = r['座號'], v = Number(r['成績']); best[dd] = best[dd] || {}; if (best[dd][n] == null || v < best[dd][n]) best[dd][n] = v; });
+        const today = best[d] || {};
+        const prevDates = Object.keys(best).filter((x) => x < d);
+        const prevBest = (n) => { const vs = prevDates.map((x) => best[x][n]).filter((v) => v != null); return vs.length ? Math.min(...vs) : null; };
+        const list = rosterOf(c).filter((r) => today[r['座號']] != null).map((r) => ({ no: r['座號'], team: r['隊'], v: today[r['座號']], prev: prevBest(r['座號']) })).sort((a, b) => a.v - b.v);
+        if (!list.length) { $('#rsum').innerHTML = `<div class="card muted">${esc(c)} ${esc(d)} 還沒有成績。</div>`; return; }
+        const vals = list.map((x) => x.v), avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+        const delta = (x) => (x.prev == null ? '<span class="muted">首次</span>' : (x.prev - x.v > 0 ? `<b style="color:var(--brand)">▲ ${(x.prev - x.v).toFixed(2)}</b>` : x.prev - x.v < 0 ? `▼ ${(x.v - x.prev).toFixed(2)}` : '＝'));
+        $('#rsum').innerHTML = `<h2>${esc(c)}　${esc(d)} 成績</h2>
+          <div class="grid"><div class="card"><div class="small muted">測驗人數</div><h2 style="margin:4px 0">${list.length}</h2></div>
+          <div class="card"><div class="small muted">最快</div><h2 style="margin:4px 0">${fmtSec(vals[0])} 秒</h2></div>
+          <div class="card"><div class="small muted">全班平均</div><h2 style="margin:4px 0">${fmtSec(avg)} 秒</h2></div></div>
+          <div class="card scroll"><table><thead><tr><th>名次</th><th>座號</th><th>隊</th><th>最佳秒數</th><th>與之前最佳比</th></tr></thead><tbody>${list.map((x, i) =>
+            `<tr><td>${i + 1}</td><td>${x.no}</td><td>${x.team}</td><td>${fmtSec(x.v)}</td><td>${delta(x)}</td></tr>`).join('')}</tbody></table>
+          <p class="small muted">▲＝比之前最佳更快（秒）。三年級重點是看自己有沒有進步，名次僅供參考，不建議公開排名。</p>
+          <button class="btn sm ghost noprint" id="rcsv">下載全部成績 CSV</button></div>`;
+        $('#rcsv').onclick = () => {
+          const head = ['日期', '班級', '項目', '座號', '次別', '成績', '單位', '備註'];
+          const csv = '﻿' + [head, ...scores.map((r) => head.map((k) => r[k]))].map((a) => a.map((c) => `"${String(c == null ? '' : c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+          const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `${RUN_ITEM}成績.csv`; a.click();
+        };
+      };
+      try { [roster, scores] = await Promise.all([API.teacher('roster'), API.teacher('getScores', { '項目': RUN_ITEM })]); }
+      catch (e) { $('#rtable').textContent = '讀取失敗：' + e.message; return; }
+      roster.sort((a, b) => a['座號'] - b['座號']);
+      render();
+      $('#rc').onchange = render; $('#rd').onchange = render; $('#rt').onchange = render;
+      $('#rsave').onclick = async () => {
+        const { c, d, t } = sel(); const items = []; let bad = '';
+        $$('.sec').forEach((inp) => {
+          const raw = inp.value.trim(); if (!raw) return;
+          const v = Number(raw);
+          if (!(v >= 8 && v <= 60)) bad = bad || `座號 ${inp.dataset.no} 的「${raw}」不像 100 公尺的秒數（預期約 8–60）`;
+          items.push({ '日期': d, '班級': c, '項目': RUN_ITEM, '座號': inp.dataset.no, '次別': t, '成績': v, '單位': '秒' });
+        });
+        if (!d) { toast('請選日期'); return; }
+        if (bad) { toast(bad); return; }
+        if (!items.length) { toast('還沒有輸入任何秒數'); return; }
+        $('#rsave').disabled = true; $('#rmsg').textContent = '儲存中…';
+        try { scores = await API.teacher('saveScores', { items }); $('#rmsg').textContent = `已儲存 ${items.length} 筆`; toast('已儲存'); render(); }
+        catch (e) { $('#rmsg').textContent = '失敗：' + e.message; }
+        $('#rsave').disabled = false;
+      };
+    }
+  };
+}
+
 /* ---------- 設定 ---------- */
 Pages.settings = async function () {
   return {
@@ -372,10 +455,26 @@ Pages.settings = async function () {
       <label>班級代碼（學生評量連結用）</label><input id="cc" value="${esc(API.code())}">
       <label>Claude 備課教練專案網址</label><input id="cl" style="width:100%" value="${esc(store.get('claude_url', ''))}" placeholder="https://claude.ai/project/…">
       <div class="row" style="margin-top:12px"><button class="btn" id="save">儲存</button><button class="btn ghost" id="test">測試連線</button><span id="r" class="small muted"></span></div></div>
+    <div class="card"><h3>班級名單（甲班／乙班）</h3>
+      <p class="small muted">每班各貼一次。每行一位學生：<code>座號</code>、或 <code>座號,隊</code>、或 <code>座號,隊,暱稱</code>（逗號、Tab 都可以，可直接從 Excel 貼上）。沒寫隊的，會依順序每 3 人自動一隊。<b>請用座號或代號，不要貼真實全名。</b>儲存只會取代選的那一班，另一班不動。</p>
+      <div class="row"><select id="rcls">${CLASSES.map((c) => `<option>${c}</option>`).join('')}</select><button class="btn sm ghost" id="rload">載入目前名單</button></div>
+      <textarea id="rtxt" rows="10" style="width:100%;margin-top:8px" placeholder="1,1&#10;2,1&#10;3,1&#10;4,2"></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn" id="rsv">儲存這一班的名單</button><span id="rmsg" class="small muted"></span></div></div>
     <p class="small muted">後端建置步驟見專案內 <code>網站/appscript/README.md</code>。</p>`,
     after: () => {
       const save = () => { store.set('api_url', $('#u').value.trim()); store.sset('pin', $('#p').value); store.set('class_code', $('#cc').value.trim()); store.set('claude_url', $('#cl').value.trim()); };
       $('#save').onclick = () => { save(); toast('已儲存'); };
+      const rcur = async () => (await API.teacher('roster')).filter((r) => clsOf(r) === $('#rcls').value).sort((a, b) => a['座號'] - b['座號']);
+      $('#rload').onclick = async () => { save(); try { $('#rtxt').value = (await rcur()).map((r) => [r['座號'], r['隊'], r['暱稱']].join(',').replace(/,$/, '')).join('\n'); $('#rmsg').textContent = ''; } catch (e) { $('#rmsg').textContent = '失敗：' + e.message; } };
+      $('#rsv').onclick = async () => {
+        save();
+        const rows = $('#rtxt').value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => l.split(/[,\t，]/).map((x) => x.trim()));
+        const roster = rows.map((c, i) => ({ '座號': c[0], '隊': c[1] || Math.ceil((i + 1) / 3), '暱稱': c[2] || '' }));
+        if (!roster.length) { $('#rmsg').textContent = '名單是空的'; return; }
+        if (roster.some((r) => !/^\d+$/.test(String(r['座號'])))) { $('#rmsg').textContent = '座號必須是數字'; return; }
+        if (!confirm(`要用這 ${roster.length} 人取代「${$('#rcls').value}」目前的名單嗎？`)) return;
+        try { await API.teacher('saveRoster', { '班級': $('#rcls').value, roster }); $('#rmsg').textContent = `已儲存 ${roster.length} 人`; toast('已儲存'); } catch (e) { $('#rmsg').textContent = '失敗：' + e.message; }
+      };
       $('#test').onclick = async () => { save(); $('#r').textContent = '測試中…';
         try { const d = await API.call('ping', {}, API.pin() ? 'teacher' : 'student'); $('#r').textContent = '連線成功，身分：' + ({ teacher: '老師', student: '學生', none: '未通過驗證（密碼或代碼不對）' }[d.role] || d.role); }
         catch (e) { $('#r').textContent = '失敗：' + e.message; } };

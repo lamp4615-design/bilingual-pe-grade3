@@ -27,19 +27,22 @@ Pages.eval = async function (id, no, q) {
   const ev = s['學生評量'] || { '自評': [], '同儕': [] };
   const rub = Object.fromEntries(L['評量規準'].map((r) => [r['項目'], r]));
   let roster, demo = false;
-  try { roster = await API.student('roster'); } catch (e) { demo = true; roster = Array.from({ length: 18 }, (_, i) => ({ '座號': i + 1, '隊': Math.floor(i / 3) + 1, '暱稱': '' })); }
+  try { roster = await API.student('roster'); } catch (e) { demo = true; roster = Array.from({ length: 18 }, (_, i) => ({ '班級': '甲班', '座號': i + 1, '隊': Math.floor(i / 3) + 1, '暱稱': '' })); }
   Eval.flush();
-  const st = { step: 'team', team: null, me: null, mode: null, idx: 0, target: null, tteam: null, grades: [], count: 0 };
-  const teams = [...new Set(roster.map((r) => Number(r['隊'])))].sort((a, b) => a - b);
+  const classes = [...new Set(roster.map((r) => r['班級'] || '甲班'))].sort();
+  const st = { step: classes.length > 1 ? 'cls' : 'team', cls: classes[0], team: null, me: null, mode: null, idx: 0, target: null, tteam: null, grades: [], count: 0 };
+  const mine = () => roster.filter((r) => (r['班級'] || '甲班') === st.cls);
+  const teamsOf = () => [...new Set(mine().map((r) => Number(r['隊'])))].sort((a, b) => a - b);
   const label = (r) => `${r['座號']}${r['暱稱'] ? ' ' + r['暱稱'] : ''}`;
   const back = (to) => `<p style="text-align:center"><button class="btn ghost" data-go="${to}">← 回上一步</button></p>`;
 
   function view() {
     const head = `<div class="eval"><h1>第 ${s['節']} 節　${esc(s['主題'])}</h1>
       ${demo ? '<p class="notice warn" style="text-align:center">示範模式：尚未連線，送出的資料不會儲存。</p>' : ''}`;
-    if (st.step === 'team') return head + `<p class="lead">你是第幾隊？ Which team?</p><div class="big">${teams.map((t) => `<button class="team-${t}" data-team="${t}">${t}</button>`).join('')}</div></div>`;
-    if (st.step === 'me') return head + `<p class="lead">你是幾號？ Who are you?</p><div class="big">${roster.filter((r) => Number(r['隊']) === st.team).map((r) => `<button class="team-${st.team}" data-me="${r['座號']}">${esc(label(r))}</button>`).join('')}</div>${back('team')}</div>`;
-    if (st.step === 'menu') return head + `<p class="lead">${esc(label(roster.find((r) => Number(r['座號']) === st.me)))} 號，你好！ Hello!</p>
+    if (st.step === 'cls') return head + `<p class="lead">你是哪一班？ Which class?</p><div class="big">${classes.map((c) => `<button data-cls="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>`;
+    if (st.step === 'team') return head + `<p class="lead">${esc(st.cls)}：你是第幾隊？ Which team?</p><div class="big">${teamsOf().map((t) => `<button class="team-${t}" data-team="${t}">${t}</button>`).join('')}</div>${classes.length > 1 ? back('cls') : ''}</div>`;
+    if (st.step === 'me') return head + `<p class="lead">你是幾號？ Who are you?</p><div class="big">${mine().filter((r) => Number(r['隊']) === st.team).map((r) => `<button class="team-${st.team}" data-me="${r['座號']}">${esc(label(r))}</button>`).join('')}</div>${back('team')}</div>`;
+    if (st.step === 'menu') return head + `<p class="lead">${esc(label(mine().find((r) => Number(r['座號']) === st.me)))} 號，你好！ Hello!</p>
       <div class="big">${ev['自評'].length ? '<button data-mode="self">😀 我的自評<br><small>My Self-Check</small></button>' : ''}
       ${ev['同儕'].length ? '<button data-mode="peer">⭐ 觀察夥伴<br><small>Watch a Teammate</small></button>' : ''}</div>
       ${st.count ? `<p class="lead">已送出 ${st.count} 筆，謝謝你！</p>` : ''}${back('me')}</div>`;
@@ -49,8 +52,8 @@ Pages.eval = async function (id, no, q) {
         <div class="big faces">${FACES.map(([g, f, zh, en]) => `<button data-g="${g}">${f}<small>${zh}<br>${en}</small></button>`).join('')}</div>
         <p class="lead">${st.idx + 1} / ${ev['自評'].length}</p></div>`;
     }
-    if (st.step === 'ptarget') return head + `<p class="lead">你要觀察哪一隊？ Which team?</p><div class="big">${teams.map((t) => `<button class="team-${t}" data-tteam="${t}">${t}</button>`).join('')}</div>${back('menu')}</div>`;
-    if (st.step === 'ptarget2') return head + `<p class="lead">觀察誰？ Who?</p><div class="big">${roster.filter((r) => Number(r['隊']) === st.tteam && Number(r['座號']) !== st.me).map((r) => `<button class="team-${st.tteam}" data-target="${r['座號']}">${esc(label(r))}</button>`).join('')}</div>${back('ptarget')}</div>`;
+    if (st.step === 'ptarget') return head + `<p class="lead">你要觀察哪一隊？ Which team?</p><div class="big">${teamsOf().map((t) => `<button class="team-${t}" data-tteam="${t}">${t}</button>`).join('')}</div>${back('menu')}</div>`;
+    if (st.step === 'ptarget2') return head + `<p class="lead">觀察誰？ Who?</p><div class="big">${mine().filter((r) => Number(r['隊']) === st.tteam && Number(r['座號']) !== st.me).map((r) => `<button class="team-${st.tteam}" data-target="${r['座號']}">${esc(label(r))}</button>`).join('')}</div>${back('ptarget')}</div>`;
     if (st.step === 'peer') {
       const r = rub[ev['同儕'][st.idx]];
       return head + `<p class="lead">觀察 ${st.target} 號</p><p class="q">${esc(r['同儕觀察']['中文'])}</p><p class="q-en">${esc(r['同儕觀察']['英文'])}</p>
@@ -66,13 +69,14 @@ Pages.eval = async function (id, no, q) {
     return '';
   }
   function base(item, type) {
-    return { '單元': L['課程名稱'], '節': s['節'], '類型': type, '評量者座號': st.me, '評量者隊': st.team, '項目': item };
+    return { '班級': st.cls, '單元': L['課程名稱'], '節': s['節'], '類型': type, '評量者座號': st.me, '評量者隊': st.team, '項目': item };
   }
   function bind(root) {
     root.onclick = async (e) => {
       const b = e.target.closest('button'); if (!b) return;
       const d = b.dataset;
-      if (d.team) { st.team = +d.team; st.step = 'me'; }
+      if (d.cls) { st.cls = d.cls; st.step = 'team'; }
+      else if (d.team) { st.team = +d.team; st.step = 'me'; }
       else if (d.me) { st.me = +d.me; st.step = 'menu'; }
       else if (d.mode) { st.mode = d.mode; st.idx = 0; st.grades = []; st.step = d.mode === 'self' ? 'self' : 'ptarget'; }
       else if (d.tteam) { st.tteam = +d.tteam; st.step = 'ptarget2'; }

@@ -12,15 +12,17 @@
 
 const SHEET = {
   roster: '學生名單', assess: '學生評量', weak: '不熟悉清單',
-  taught: '教學進度', reflect: '教學省思', review: '複習排程'
+  taught: '教學進度', reflect: '教學省思', review: '複習排程', scores: '體育成績'
 };
+const CLASSES = ['甲班', '乙班'];
 const HEADERS = {
-  '學生名單': ['座號', '隊', '暱稱'],
-  '學生評量': ['時間', '單元', '節', '類型', '評量者座號', '評量者隊', '被評者座號', '項目', '等第', '鼓勵語'],
+  '學生名單': ['座號', '隊', '暱稱', '班級'],
+  '學生評量': ['時間', '單元', '節', '類型', '評量者座號', '評量者隊', '被評者座號', '項目', '等第', '鼓勵語', '班級'],
   '不熟悉清單': ['id', '類型', '內容', '來源', '次數', '狀態', '最近練習', '備註'],
   '教學進度': ['日期', '單元', '節', '狀態', '備註'],
   '教學省思': ['日期', '單元', '節', '做得好', '要調整', '下次複習'],
-  '複習排程': ['單元', '節', '項目', '下次複習日', '次數']
+  '複習排程': ['單元', '節', '項目', '下次複習日', '次數'],
+  '體育成績': ['日期', '班級', '項目', '座號', '次別', '成績', '單位', '備註', '登錄時間']
 };
 
 /** 第一次使用：在 Apps Script 編輯器執行一次 setup()，會建立所有工作表與表頭。 */
@@ -31,13 +33,26 @@ function setup() {
     if (sh.getLastRow() === 0) {
       sh.getRange(1, 1, 1, HEADERS[name].length).setValues([HEADERS[name]]).setFontWeight('bold');
       sh.setFrozenRows(1);
+    } else {                                  // 舊版工作表：補上新增的欄位（例如「班級」）
+      const have = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+      HEADERS[name].forEach(function (h) {
+        if (have.indexOf(h) < 0) { sh.getRange(1, sh.getLastColumn() + 1).setValue(h).setFontWeight('bold'); have.push(h); }
+      });
+    }
+  });
+  // 舊資料沒有班級的，一律視為甲班
+  [SHEET.roster, SHEET.assess].forEach(function (name) {
+    const sh = sheet_(name), col = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].indexOf('班級') + 1;
+    if (sh.getLastRow() > 1) {
+      const r = sh.getRange(2, col, sh.getLastRow() - 1, 1), v = r.getValues();
+      r.setValues(v.map(function (x) { return [x[0] || CLASSES[0]]; }));
     }
   });
   const roster = ss.getSheetByName(SHEET.roster);
-  if (roster.getLastRow() === 1) {          // 預設 18 人、6 隊、每隊 3 人（可自行改）
+  if (roster.getLastRow() === 1) {          // 預設每班 18 人、6 隊、每隊 3 人；之後用網站「設定」頁匯入真正的座號名單
     const rows = [];
-    for (let i = 1; i <= 18; i++) rows.push([i, Math.ceil(i / 3), '']);
-    roster.getRange(2, 1, rows.length, 3).setValues(rows);
+    CLASSES.forEach(function (c) { for (let i = 1; i <= 18; i++) rows.push([i, Math.ceil(i / 3), '', c]); });
+    roster.getRange(2, 1, rows.length, 4).setValues(rows);
   }
   ['Sheet1', '工作表1'].forEach(function (n) {
     const d = ss.getSheetByName(n);
@@ -59,7 +74,8 @@ function doPost(e) {
     const teacherActions = {
       assessSummary: assessSummary_, saveWeak: saveWeak_, getWeak: getWeak_,
       markTaught: markTaught_, getProgress: getProgress_, saveReflection: saveReflection_,
-      getReflections: getReflections_, saveRoster: saveRoster_
+      getReflections: getReflections_, saveRoster: saveRoster_,
+      saveScores: saveScores_, getScores: getScores_
     };
     if (req.action === 'ping') return out({ ok: true, data: { role: teacherOK ? 'teacher' : studentOK ? 'student' : 'none' } });
     if (studentActions[req.action] && (studentOK || teacherOK)) return out({ ok: true, data: studentActions[req.action](p) });
@@ -86,14 +102,14 @@ function now_() { return Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-M
 function today_() { return Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd'); }
 
 /* ---------- 學生（iPad） ---------- */
-function roster_() { return rows_(SHEET.roster); }
+function roster_() { return rows_(SHEET.roster).map(function (r) { r['班級'] = r['班級'] || CLASSES[0]; return r; }); }
 
 function submitAssessment_(p) {
   const grade = Number(p.等第);
   if ([1, 2, 3].indexOf(grade) < 0) throw new Error('等第必須是 1、2、3');
   if (['自評', '同儕'].indexOf(p.類型) < 0) throw new Error('類型必須是 自評 或 同儕');
   append_(SHEET.assess, {
-    時間: now_(), 單元: p.單元, 節: Number(p.節), 類型: p.類型, 評量者座號: Number(p.評量者座號), 評量者隊: Number(p.評量者隊),
+    班級: p.班級 || CLASSES[0], 時間: now_(), 單元: p.單元, 節: Number(p.節), 類型: p.類型, 評量者座號: Number(p.評量者座號), 評量者隊: Number(p.評量者隊),
     被評者座號: p.被評者座號 ? Number(p.被評者座號) : '', 項目: p.項目, 等第: grade, 鼓勵語: String(p.鼓勵語 || '').slice(0, 60)
   });
   return { saved: true };
@@ -102,7 +118,7 @@ function submitAssessment_(p) {
 /* ---------- 老師：評量 ---------- */
 function assessSummary_(p) {
   const rows = rows_(SHEET.assess).filter(function (r) {
-    return (!p.單元 || r.單元 === p.單元) && (!p.節 || Number(r.節) === Number(p.節));
+    return (!p.單元 || r.單元 === p.單元) && (!p.節 || Number(r.節) === Number(p.節)) && (!p.班級 || (r.班級 || CLASSES[0]) === p.班級);
   });
   const byItem = {}, byStudent = {};
   rows.forEach(function (r) {
@@ -111,7 +127,7 @@ function assessSummary_(p) {
     byItem[k][r.等第]++;
     const sid = r.類型 === '自評' ? r.評量者座號 : r.被評者座號;
     if (sid) {
-      const key = sid + '｜' + r.類型 + '｜' + r.項目;
+      const key = (r.班級 || CLASSES[0]) + '｜' + sid + '｜' + r.類型 + '｜' + r.項目;
       byStudent[key] = byStudent[key] || { sum: 0, n: 0 };
       byStudent[key].sum += Number(r.等第);
       byStudent[key].n++;
@@ -165,11 +181,57 @@ function saveReflection_(p) {
 function getReflections_(p) { return rows_(SHEET.reflect).filter(function (r) { return !p.單元 || r.單元 === p.單元; }); }
 
 /* ---------- 老師：學生名單 ---------- */
+/* 只取代 p.班級 這一班的名單，另一班不動。p.roster = [{座號, 隊, 暱稱}] */
 function saveRoster_(p) {
-  const sh = sheet_(SHEET.roster);
+  if (CLASSES.indexOf(p.班級) < 0) throw new Error('班級必須是 ' + CLASSES.join(' 或 '));
+  const mine = (p.roster || []).map(function (r) { return { 座號: Number(r.座號), 隊: Number(r.隊), 暱稱: String(r.暱稱 || ''), 班級: p.班級 }; });
+  const seen = {};
+  mine.forEach(function (r) {
+    if (!(r.座號 > 0) || !(r.隊 > 0)) throw new Error('座號與隊必須是正整數（座號 ' + r.座號 + '）');
+    if (seen[r.座號]) throw new Error('座號重複：' + r.座號);
+    seen[r.座號] = true;
+  });
+  const others = roster_().filter(function (r) { return r.班級 !== p.班級; });
+  const all = others.concat(mine);
+  const sh = sheet_(SHEET.roster), h = HEADERS[SHEET.roster];
   sh.clearContents();
-  sh.getRange(1, 1, 1, 3).setValues([HEADERS[SHEET.roster]]).setFontWeight('bold');
-  const rows = (p.roster || []).map(function (r) { return [Number(r.座號), Number(r.隊), String(r.暱稱 || '')]; });
-  if (rows.length) sh.getRange(2, 1, rows.length, 3).setValues(rows);
+  sh.getRange(1, 1, 1, h.length).setValues([h]).setFontWeight('bold');
+  if (all.length) sh.getRange(2, 1, all.length, h.length).setValues(all.map(function (r) { return h.map(function (k) { return r[k]; }); }));
   return roster_();
+}
+
+/* ---------- 老師：體育成績（例如 100 公尺跑秒數） ---------- */
+/* 同一天、同班級、同項目、同座號、同次別只留一筆（重送＝更正）。日期以純文字存，避免試算表自動轉成日期。 */
+function dateStr_(v) { return v instanceof Date ? Utilities.formatDate(v, 'Asia/Taipei', 'yyyy-MM-dd') : String(v).slice(0, 10); }
+function scoreRows_() {
+  return rows_(SHEET.scores).map(function (r) {
+    r['日期'] = dateStr_(r['日期']);
+    return r;
+  });
+}
+function getScores_(p) { return scoreRows_().filter(function (r) { return (!p.項目 || r['項目'] === p.項目) && (!p.班級 || r['班級'] === p.班級); }); }
+function saveScores_(p) {
+  const items = p.items || [], h = HEADERS[SHEET.scores];
+  items.forEach(function (it) {
+    const v = Number(it.成績);
+    if (!(v > 0 && v < 1000)) throw new Error('座號 ' + it.座號 + ' 的成績必須是大於 0 的數字');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(it.日期))) throw new Error('日期格式必須是 YYYY-MM-DD');
+    if (!it.項目) throw new Error('缺少項目');
+    if (CLASSES.indexOf(it.班級) < 0) throw new Error('班級必須是 ' + CLASSES.join(' 或 '));
+  });
+  const lock = LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    const sh = sheet_(SHEET.scores), index = {};
+    const key = function (d, c, i, s, t) { return [d, c, i, Number(s), Number(t)].join('|'); };
+    scoreRows_().forEach(function (r, i) { index[key(r['日期'], r['班級'], r['項目'], r['座號'], r['次別'])] = i + 2; });
+    items.forEach(function (it) {
+      const k = key(it.日期, it.班級, it.項目, it.座號, it.次別 || 1);
+      const row = [it.日期, it.班級, it.項目, Number(it.座號), Number(it.次別 || 1), Number(it.成績), it.單位 || '', String(it.備註 || '').slice(0, 60), now_()];
+      const at = index[k] || sh.getLastRow() + 1;
+      sh.getRange(at, 1).setNumberFormat('@');
+      sh.getRange(at, 1, 1, h.length).setValues([row]);
+      index[k] = at;
+    });
+  } finally { lock.releaseLock(); }
+  return getScores_({ '項目': items.length ? items[0].項目 : '', '班級': items.length ? items[0].班級 : '' });
 }
