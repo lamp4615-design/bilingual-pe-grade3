@@ -446,6 +446,34 @@ async function recRun() {
   };
 }
 
+/* ---------- 課堂入口：手機／平板開哪個網址、QR code ---------- */
+const qrSvg = (text, cell) => { const q = qrcode(0, 'M'); q.addData(text); q.make(); return q.createSvgTag({ cellSize: cell || 4, margin: 2, scalable: true }); };
+Pages.go = async function () {
+  const units = await DATA.units(); const { lesson: L } = await DATA.unit(units[0].id); const uid = units[0].id;
+  const base = location.href.split('#')[0];
+  return {
+    html: `<h1>課堂入口</h1><p class="muted">上課時，用手機或平板掃 QR code 就能開啟。</p>
+    <h2>老師：登記跑步成績（手機）</h2>
+    <div class="card"><div class="row" style="align-items:flex-start;gap:16px"><div id="qr-run" style="width:140px;flex:none"></div>
+      <div style="flex:1;min-width:200px"><ol class="small"><li>手機掃左邊 QR code（或直接按下方按鈕）。</li><li>第一次要到「設定」輸入<b>老師密碼</b>，按儲存（關掉瀏覽器後要再輸入一次）。</li><li>到「學習紀錄 → 跑步成績」選班級、日期，逐一輸入秒數。</li></ol>
+      <a class="btn" href="#/records/run">開啟跑步成績</a> <a class="btn ghost" href="#/settings">設定（輸入老師密碼）</a></div></div></div>
+    <h2>學生：自評與同儕互評（平板）</h2>
+    <div class="card"><div class="row"><label style="margin:0">班級代碼</label><input id="gcode" size="10" value="${esc(API.code())}" placeholder="例如 1234"><span class="small muted">會寫進 QR code，學生不用自己輸入。</span></div>
+      <p class="small muted">每一節課有一個 QR code。學生掃了之後：選班級 → 選隊 → 選座號 → 自評或觀察夥伴。印出來或投影在黑板上都可以。</p></div>
+    <div class="grid" id="qrs">${L['節次'].map((s) => `<div class="card" style="text-align:center"><b>第 ${s['節']} 節</b><div class="small muted">${esc(s['主題'])}</div><div class="qrbox" data-n="${s['節']}" style="width:160px;margin:8px auto"></div>
+      <a class="btn sm ghost" href="#/eval/${uid}/${s['節']}${API.code() ? '?code=' + encodeURIComponent(API.code()) : ''}">預覽</a> <button class="btn sm ghost cp" data-n="${s['節']}">複製連結</button></div>`).join('')}</div>
+    <p class="small muted noprint">提醒：平板可以用 Safari／Chrome「加入主畫面」，下次就像 App 一樣一點就開。</p>`,
+    after: () => {
+      const evalUrl = (n) => { const c = $('#gcode').value.trim(); return `${base}#/eval/${uid}/${n}${c ? '?code=' + encodeURIComponent(c) : ''}`; };
+      const draw = () => { $$('.qrbox').forEach((el) => { el.innerHTML = qrSvg(evalUrl(el.dataset.n)); }); };
+      $('#qr-run').innerHTML = qrSvg(base + '#/records/run');
+      draw();
+      $('#gcode').oninput = () => { store.set('class_code', $('#gcode').value.trim()); draw(); };
+      $$('.cp').forEach((b) => { b.onclick = () => copyText(evalUrl(b.dataset.n), '已複製連結'); });
+    }
+  };
+};
+
 /* ---------- 設定 ---------- */
 Pages.settings = async function () {
   return {
