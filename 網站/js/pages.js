@@ -244,7 +244,19 @@ function recTabs(cur) {
   return `<div class="tabs">${[['', '歷程總覽'], ['eval', '學生評量'], ['reflect', '課後省思'], ['run', '跑步成績']].map(([k, n]) => `<a class="${cur === k ? 'on' : ''}" href="#/records${k ? '/' + k : ''}">${n}</a>`).join('')}</div>`;
 }
 const connected = () => API.enabled() && !!API.pin();
-const gate = () => `<div class="notice warn">這個分頁需要先連線後端並輸入老師密碼。<a href="#/settings">前往設定</a></div>`;
+const gate = () => `<div class="notice warn">這個分頁需要老師密碼。輸入一次，這台裝置就會記住。
+  <div class="row" style="margin-top:8px"><input id="gatepin" type="password" placeholder="老師密碼" autocomplete="current-password"><button class="btn sm" onclick="savePin()">確定</button><span id="gatemsg" class="small"></span></div>
+  ${API.enabled() ? '' : '<div class="small">尚未連線後端，請先到<a href="#/settings">設定</a>。</div>'}</div>`;
+async function savePin() {
+  const v = ($('#gatepin').value || '').trim(); if (!v) return;
+  $('#gatemsg').textContent = '確認中…';
+  try {
+    const old = API.pin(); store.set('pin', v);
+    const d = await API.call('ping', {}, 'teacher');
+    if (d.role !== 'teacher') { store.set('pin', old); $('#gatemsg').textContent = '密碼不對'; return; }
+    route();
+  } catch (e) { store.set('pin', ''); $('#gatemsg').textContent = '失敗：' + e.message; }
+}
 const evalBars = (byItem) => Object.entries(byItem || {}).map(([k, g]) => {
   const t = (g[1] || 0) + (g[2] || 0) + (g[3] || 0) || 1;
   return `<div style="margin:10px 0"><b>${esc(k.replace('｜', ' · '))}</b><div class="bar"><i class="g3" style="width:${(g[3] || 0) / t * 100}%"></i><i class="g2" style="width:${(g[2] || 0) / t * 100}%"></i><i class="g1" style="width:${(g[1] || 0) / t * 100}%"></i></div>
@@ -455,8 +467,8 @@ Pages.go = async function () {
     html: `<h1>課堂入口</h1><p class="muted">上課時，用手機或平板掃 QR code 就能開啟。</p>
     <h2>老師：登記跑步成績（手機）</h2>
     <div class="card"><div class="row" style="align-items:flex-start;gap:16px"><div id="qr-run" style="width:140px;flex:none"></div>
-      <div style="flex:1;min-width:200px"><ol class="small"><li>手機掃左邊 QR code（或直接按下方按鈕）。</li><li>第一次要到「設定」輸入<b>老師密碼</b>，按儲存（關掉瀏覽器後要再輸入一次）。</li><li>到「學習紀錄 → 跑步成績」選班級、日期，逐一輸入秒數。</li></ol>
-      <a class="btn" href="#/records/run">開啟跑步成績</a> <a class="btn ghost" href="#/settings">設定（輸入老師密碼）</a></div></div></div>
+      <div style="flex:1;min-width:200px"><ol class="small"><li>手機掃左邊 QR code（或直接按下方按鈕）。</li><li>第一次打開時輸入<b>老師密碼</b>，這支手機就會記住，之後不用再輸入。</li><li>到「學習紀錄 → 跑步成績」選班級、日期，逐一輸入秒數。</li></ol>
+      <a class="btn" href="#/records/run">開啟跑步成績</a> <a class="btn ghost" href="#/settings">設定</a></div></div></div>
     <h2>學生：自評與同儕互評（平板）</h2>
     <div class="card"><div class="row"><label style="margin:0">班級代碼</label><input id="gcode" size="10" value="${esc(API.code())}" placeholder="例如 1234"><span class="small muted">會寫進 QR code，學生不用自己輸入。</span></div>
       <p class="small muted">每一節課有一個 QR code。學生掃了之後：選班級 → 選隊 → 選座號 → 自評或觀察夥伴。印出來或投影在黑板上都可以。</p></div>
@@ -479,7 +491,7 @@ Pages.settings = async function () {
   return {
     html: `<h1>設定</h1><p class="muted">這些設定只存在這台裝置的瀏覽器。</p>
     <div class="card"><label>Apps Script 網頁應用程式網址</label><input id="u" style="width:100%" value="${esc(store.get('api_url', ''))}" placeholder="${esc((window.APP_CONFIG && window.APP_CONFIG.APPS_SCRIPT_URL) || 'https://script.google.com/macros/s/…/exec')}">
-      <label>老師密碼（只在本次瀏覽暫存）</label><input id="p" type="password" value="${esc(API.pin())}">
+      <label>老師密碼（記在這台裝置，請只在自己的手機或電腦輸入）</label><input id="p" type="password" value="${esc(API.pin())}">
       <label>班級代碼（學生評量連結用）</label><input id="cc" value="${esc(API.code())}">
       <label>Claude 備課教練專案網址</label><input id="cl" style="width:100%" value="${esc(store.get('claude_url', ''))}" placeholder="https://claude.ai/project/…">
       <div class="row" style="margin-top:12px"><button class="btn" id="save">儲存</button><button class="btn ghost" id="test">測試連線</button><span id="r" class="small muted"></span></div></div>
@@ -490,7 +502,7 @@ Pages.settings = async function () {
       <div class="row" style="margin-top:8px"><button class="btn" id="rsv">儲存這一班的名單</button><span id="rmsg" class="small muted"></span></div></div>
     <p class="small muted">後端建置步驟見專案內 <code>網站/appscript/README.md</code>。</p>`,
     after: () => {
-      const save = () => { store.set('api_url', $('#u').value.trim()); store.sset('pin', $('#p').value); store.set('class_code', $('#cc').value.trim()); store.set('claude_url', $('#cl').value.trim()); };
+      const save = () => { store.set('api_url', $('#u').value.trim()); store.set('pin', $('#p').value); store.set('class_code', $('#cc').value.trim()); store.set('claude_url', $('#cl').value.trim()); };
       $('#save').onclick = () => { save(); toast('已儲存'); };
       const rcur = async () => (await API.teacher('roster')).filter((r) => clsOf(r) === $('#rcls').value).sort((a, b) => a['座號'] - b['座號']);
       $('#rload').onclick = async () => { save(); try { $('#rtxt').value = (await rcur()).map((r) => [r['座號'], r['隊'], r['暱稱']].join(',').replace(/,$/, '')).join('\n'); $('#rmsg').textContent = ''; } catch (e) { $('#rmsg').textContent = '失敗：' + e.message; } };

@@ -1,7 +1,7 @@
 /* Apps Script 後端連線。網址可在「設定」頁覆寫（存在這台裝置）。 */
 const API = {
   url() { return store.get('api_url', '') || (window.APP_CONFIG && window.APP_CONFIG.APPS_SCRIPT_URL) || ''; },
-  pin() { return store.sget('pin', '') || ''; },
+  pin() { return store.get('pin', '') || store.sget('pin', '') || ''; }, // 記在這台裝置；舊版存在本次瀏覽的也讀得到
   code() { return store.get('class_code', ''); },
   enabled() { return !!this.url(); },
   async call(action, payload, role) {
