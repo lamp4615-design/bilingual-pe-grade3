@@ -56,7 +56,7 @@ details summary { cursor:pointer; color:var(--brand); font-weight:700; }
 <body>
 <header><b>教師後台</b><span>雙語體育共學站 · 三年級甲班／乙班</span></header>
 <nav id="tabs">
-  <button data-t="rec">登記成績</button><button data-t="view">成績總覽</button><button data-t="sel">選手</button><button data-t="grp">分組</button><button data-t="ros">名單</button>
+  <button data-t="rec">登記成績</button><button data-t="grade">課堂評分</button><button data-t="view">成績總覽</button><button data-t="sel">選手</button><button data-t="grp">分組</button><button data-t="ros">名單</button>
 </nav>
 <main id="main"><p class="muted">載入中…</p></main>
 <div id="toast"></div>
@@ -78,11 +78,13 @@ const SEL_EVENTS = [
   { name: '400公尺接力賽', boys: 4, girls: 4, any: 0 },
   { name: '大隊接力賽', boys: 0, girls: 0, any: 16 }
 ];
+const SITE = 'https://lamp4615-design.github.io/bilingual-pe-grade3/';  // 教案資料（單元、節次、評量項目）從網站讀
+const GRADE_LABEL = { 0: '—', 1: '努力中', 2: '達成', 3: '優異' };
 const S = { roster: [], classes: [], scores: {}, groupings: null, tab: 'rec',
   rec: { cls: '', item: ITEMS[0].name, date: '', trial: 1 },
   view: { cls: '全部', item: ITEMS[0].name, date: '' },
   grp: { scope: '', item: ITEMS[0].name, basis: 'latest', method: 'balanced', byMode: 'k', k: 4, size: 5, order: 'slow_first', unmeasured: 'spread', absent: new Set(), cur: null },
-  ros: { cls: '' },
+  ros: { cls: '' }, grade: { cls: '', sec: 1, lesson: null, rows: [] },
   sel: { scope: '每班各自', item: ITEMS[0].name, basis: 'latest', noDup: false, events: SEL_EVENTS.map((e) => Object.assign({}, e)), absent: new Set(), res: null } };
 
 const $ = (s, r) => (r || document).querySelector(s);
@@ -117,7 +119,7 @@ function bestMap(rows, it) {
 function go(t) {
   S.tab = t;
   $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
-  ({ rec: viewRec, view: viewScores, sel: viewSelect, grp: viewGroups, ros: viewRoster })[t]().catch((e) => { $('#main').innerHTML = '<div class="notice">讀取失敗：' + esc(e.message) + '</div>'; });
+  ({ rec: viewRec, grade: viewGrade, view: viewScores, sel: viewSelect, grp: viewGroups, ros: viewRoster })[t]().catch((e) => { $('#main').innerHTML = '<div class="notice">讀取失敗：' + esc(e.message) + '</div>'; });
 }
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) go(b.dataset.t); };
 
@@ -161,6 +163,37 @@ async function viewRec() {
     $('#save').disabled = false;
   };
   draw();
+}
+
+/* ===== 課堂評分：老師逐人登記三等第與備註 ===== */
+async function lessonData() {
+  if (S.grade.lesson) return S.grade.lesson;
+  const us = await (await fetch(SITE + 'data/units.json', { cache: 'no-cache' })).json();
+  S.grade.lesson = await (await fetch(SITE + us[0].lesson, { cache: 'no-cache' })).json(); return S.grade.lesson;
+}
+async function viewGrade() {
+  const Gd = S.grade; Gd.cls = Gd.cls || S.classes[0]; let L;
+  try { L = await lessonData(); } catch (e) { $('#main').innerHTML = '<div class="notice">讀不到教案資料（' + esc(e.message) + '）。請確認網站可以開啟。</div>'; return; }
+  const sess = L['節次'].find((x) => x['節'] === Gd.sec) || L['節次'][0]; Gd.sec = sess['節'];
+  const ev = sess['學生評量'] || {}; const names = Array.from(new Set((ev['自評'] || []).concat(ev['同儕'] || []))); const items = names.length ? names : L['評量規準'].map((r) => r['項目']);
+  const unit = L['課程名稱']; Gd.rows = await run('tc_getTeacherGrades', { '單元': unit, '節': Gd.sec, '班級': Gd.cls });
+  const cur = {}, note = {}; Gd.rows.forEach((r) => { if (r['項目'] === '備註') note[r['座號']] = r['備註']; else cur[r['座號'] + '|' + r['項目']] = Number(r['等第']); });
+  $('#main').innerHTML = '<div class="card"><div class="row"><div class="f"><label>班級</label><select id="gc">' + optList(S.classes, Gd.cls) + '</select></div>' +
+    '<div class="f"><label>節次</label><select id="gs">' + L['節次'].map((x) => '<option value="' + x['節'] + '"' + (x['節'] === Gd.sec ? ' selected' : '') + '>第 ' + x['節'] + ' 節　' + esc(x['主題']) + '</option>').join('') + '</select></div></div>' +
+    '<p class="small muted">單元：' + esc(L['單元名稱']) + '。逐人選三等第（努力中／達成／優異），選「—」就是清除。這是老師的形成性觀察，不是成績。</p>' +
+    '<div class="scroll"><table><thead><tr><th>座號</th>' + items.map((n) => '<th>' + esc(n) + '</th>').join('') + '<th>備註</th></tr></thead><tbody>' + clsRoster(Gd.cls).map((r) =>
+      '<tr><td>' + r['座號'] + '</td>' + items.map((n) => '<td><select class="gg" data-no="' + r['座號'] + '" data-it="' + esc(n) + '">' + [0, 1, 2, 3].map((g) => '<option value="' + g + '"' + ((cur[r['座號'] + '|' + n] || 0) === g ? ' selected' : '') + '>' + GRADE_LABEL[g] + '</option>').join('') + '</select></td>').join('') +
+      '<td><input class="gn" data-no="' + r['座號'] + '" value="' + esc(note[r['座號']] || '') + '" size="14" maxlength="200"></td></tr>').join('') + '</tbody></table></div>' +
+    '<div class="row" style="margin-top:10px"><button class="btn" id="gsv">儲存</button><span class="small muted" id="gm"></span></div></div>';
+  $('#gc').onchange = (e) => { Gd.cls = e.target.value; viewGrade(); };
+  $('#gs').onchange = (e) => { Gd.sec = Number(e.target.value); viewGrade(); };
+  $('#gsv').onclick = async () => {
+    const records = []; $$('.gg').forEach((x) => { const g = Number(x.value); if (g !== (cur[x.dataset.no + '|' + x.dataset.it] || 0)) records.push({ 座號: x.dataset.no, 項目: x.dataset.it, 等第: g, 備註: '' }); });
+    $$('.gn').forEach((x) => { if (x.value.trim() !== (note[x.dataset.no] || '')) records.push({ 座號: x.dataset.no, 項目: '備註', 等第: 0, 備註: x.value.trim() }); });
+    if (!records.length) return toast('沒有變動');
+    $('#gsv').disabled = true;
+    try { await run('tc_saveTeacherGrades', { '單元': unit, '節': Gd.sec, '班級': Gd.cls, records }); toast('已儲存 ' + records.length + ' 項變動'); viewGrade(); } catch (e) { toast('失敗：' + e.message); $('#gsv').disabled = false; }
+  };
 }
 
 /* ===== 2. 成績總覽 ===== */

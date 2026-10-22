@@ -11,7 +11,7 @@
 
 const SHEET = {
   roster: '學生名單', assess: '學生評量', weak: '不熟悉清單',
-  taught: '教學進度', reflect: '教學省思', review: '複習排程', scores: '體育成績', groups: '分組紀錄'
+  taught: '教學進度', reflect: '教學省思', review: '複習排程', scores: '體育成績', groups: '分組紀錄', tgrade: '教師評量'
 };
 const CLASSES = ['甲班', '乙班'];
 const HEADERS = {
@@ -22,6 +22,7 @@ const HEADERS = {
   '教學省思': ['日期', '單元', '節', '做得好', '要調整', '下次複習'],
   '複習排程': ['單元', '節', '項目', '下次複習日', '次數'],
   '體育成績': ['日期', '班級', '項目', '座號', '次別', '成績', '單位', '備註', '登錄時間'],
+  '教師評量': ['時間', '單元', '節', '班級', '座號', '項目', '等第', '備註'],
   '分組紀錄': ['分組ID', '建立時間', '名稱', '日期', '策略', '參數', '備註', '組別', '班級', '座號', '棒次', '成績']
 };
 
@@ -292,4 +293,46 @@ function tc_deleteGrouping(id) {
     for (let i = v.length - 1; i >= 1; i--) if (v[i][0] === id) sh.deleteRow(i + 1);
   } finally { lock.releaseLock(); }
   return tc_getGroupings();
+}
+
+/* ---------- 課堂評分：老師逐人登記三等第與備註 ----------
+ * p = { 單元, 節, 班級, records: [{ 座號, 項目, 等第(0=清除, 1–3), 備註 }] }；項目為「備註」時只存備註文字。
+ * 每人每節每項目一列，重存會覆蓋。 */
+function tc_getTeacherGrades(p) {
+  assertOwner_();
+  return rows_(SHEET.tgrade).map(function (r) { Object.keys(r).forEach(function (k) { r[k] = plain_(r[k]); }); return r; }).filter(function (r) {
+    return (!p.單元 || r.單元 === p.單元) && (!p.節 || Number(r.節) === Number(p.節)) && (!p.班級 || r.班級 === p.班級);
+  });
+}
+function tc_saveTeacherGrades(p) {
+  assertOwner_();
+  if (CLASSES.indexOf(p.班級) < 0) throw new Error('班級必須是 ' + CLASSES.join(' 或 '));
+  (p.records || []).forEach(function (r) {
+    if (r.項目 !== '備註' && [0, 1, 2, 3].indexOf(Number(r.等第 || 0)) < 0) throw new Error('等第必須是 0–3');
+  });
+  const lock = LockService.getScriptLock(); lock.waitLock(15000);
+  try {
+    const sh = sheet_(SHEET.tgrade), h = HEADERS[SHEET.tgrade], data = sh.getDataRange().getValues();
+    const col = function (k) { return h.indexOf(k); };
+    (p.records || []).forEach(function (r) {
+      const isNote = r.項目 === '備註', g = Number(r.等第 || 0);
+      let idx = -1;
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][col('單元')] === p.單元 && Number(data[i][col('節')]) === Number(p.節) && data[i][col('班級')] === p.班級 &&
+            Number(data[i][col('座號')]) === Number(r.座號) && data[i][col('項目')] === r.項目) { idx = i; break; }
+      }
+      const empty = isNote ? !r.備註 : g === 0;
+      if (idx > 0 && empty) { sh.deleteRow(idx + 1); data.splice(idx, 1); }
+      else if (idx > 0) {
+        sh.getRange(idx + 1, col('時間') + 1).setValue(now_());
+        sh.getRange(idx + 1, col('等第') + 1).setValue(isNote ? '' : g);
+        sh.getRange(idx + 1, col('備註') + 1).setValue(String(r.備註 || '').slice(0, 200));
+        data[idx][col('等第')] = isNote ? '' : g;
+      } else if (!empty) {
+        const row = [now_(), p.單元, Number(p.節), p.班級, Number(r.座號), r.項目, isNote ? '' : g, String(r.備註 || '').slice(0, 200)];
+        sh.appendRow(row); data.push(row);
+      }
+    });
+  } finally { lock.releaseLock(); }
+  return tc_getTeacherGrades({ 單元: p.單元, 節: p.節, 班級: p.班級 });
 }
