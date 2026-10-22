@@ -15,7 +15,7 @@ const SHEET = {
 };
 const CLASSES = ['甲班', '乙班'];
 const HEADERS = {
-  '學生名單': ['座號', '隊', '暱稱', '班級'],
+  '學生名單': ['座號', '隊', '暱稱', '班級', '性別'],
   '學生評量': ['時間', '單元', '節', '類型', '評量者座號', '評量者隊', '被評者座號', '項目', '等第', '鼓勵語', '班級'],
   '不熟悉清單': ['id', '類型', '內容', '來源', '次數', '狀態', '最近練習', '備註'],
   '教學進度': ['日期', '單元', '節', '狀態', '備註'],
@@ -53,8 +53,8 @@ function setup() {
   const roster = ss.getSheetByName(SHEET.roster);
   if (roster.getLastRow() === 1) {          // 預設每班 18 人、6 隊、每隊 3 人；之後用網站「設定」頁匯入真正的座號名單
     const rows = [];
-    CLASSES.forEach(function (c) { for (let i = 1; i <= 18; i++) rows.push([i, Math.ceil(i / 3), '', c]); });
-    roster.getRange(2, 1, rows.length, 4).setValues(rows);
+    CLASSES.forEach(function (c) { for (let i = 1; i <= 18; i++) rows.push([i, Math.ceil(i / 3), '', c, '']); });
+    roster.getRange(2, 1, rows.length, 5).setValues(rows);
   }
   ['Sheet1', '工作表1'].forEach(function (n) {
     const d = ss.getSheetByName(n);
@@ -189,14 +189,15 @@ function saveReflection_(p) {
 function getReflections_(p) { return rows_(SHEET.reflect).filter(function (r) { return !p.單元 || r.單元 === p.單元; }); }
 
 /* ---------- 老師：學生名單 ---------- */
-/* 只取代 p.班級 這一班的名單，另一班不動。p.roster = [{座號, 隊, 暱稱}] */
+/* 只取代 p.班級 這一班的名單，另一班不動。p.roster = [{座號, 隊, 暱稱, 性別}] */
 function saveRoster_(p) {
   if (CLASSES.indexOf(p.班級) < 0) throw new Error('班級必須是 ' + CLASSES.join(' 或 '));
-  const mine = (p.roster || []).map(function (r) { return { 座號: Number(r.座號), 隊: Number(r.隊), 暱稱: String(r.暱稱 || ''), 班級: p.班級 }; });
+  const mine = (p.roster || []).map(function (r) { return { 座號: Number(r.座號), 隊: Number(r.隊), 暱稱: String(r.暱稱 || ''), 班級: p.班級, 性別: String(r.性別 || '') }; });
   const seen = {};
   mine.forEach(function (r) {
     if (!(r.座號 > 0) || !(r.隊 > 0)) throw new Error('座號與隊必須是正整數（座號 ' + r.座號 + '）');
     if (seen[r.座號]) throw new Error('座號重複：' + r.座號);
+    if (['', '男', '女'].indexOf(r.性別) < 0) throw new Error('性別只能是 男 或 女（座號 ' + r.座號 + '）');
     seen[r.座號] = true;
   });
   const others = roster_().filter(function (r) { return r.班級 !== p.班級; });

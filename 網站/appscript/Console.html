@@ -15,6 +15,7 @@ header b { font-size:1.15rem; } header span { opacity:.85; font-size:.85rem; }
 @media (prefers-color-scheme: dark) { header { color:#06201d; } }
 nav { display:flex; gap:4px; padding:8px 12px 0; background:var(--surface); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; overflow-x:auto; }
 nav button { flex:1; min-width:84px; padding:10px 8px; border:0; border-bottom:3px solid transparent; background:none; font:inherit; font-weight:700; color:var(--muted); cursor:pointer; }
+@media print { header, nav, .noprint { display:none !important; } body { background:#fff; color:#000; } .card { break-inside:avoid; } }
 nav button.on { color:var(--brand); border-color:var(--brand); }
 main { max-width:980px; margin:0 auto; padding:14px 14px 80px; }
 h2 { font-size:1.1rem; margin:20px 0 8px; } h3 { font-size:1rem; margin:0 0 6px; }
@@ -55,16 +56,14 @@ details summary { cursor:pointer; color:var(--brand); font-weight:700; }
 <body>
 <header><b>教師後台</b><span>雙語體育共學站 · 三年級甲班／乙班</span></header>
 <nav id="tabs">
-  <button data-t="rec">登記成績</button><button data-t="view">成績總覽</button><button data-t="grp">分組</button><button data-t="ros">名單</button>
+  <button data-t="rec">登記成績</button><button data-t="view">成績總覽</button><button data-t="sel">選手</button><button data-t="grp">分組</button><button data-t="ros">名單</button>
 </nav>
 <main id="main"><p class="muted">載入中…</p></main>
 <div id="toast"></div>
 <script>
 /* ===== 基本設定 ===== */
 const ITEMS = [
-  { name: '100公尺跑', unit: '秒', better: 'low', min: 8, max: 60 },
-  { name: '800公尺跑', unit: '秒', better: 'low', min: 100, max: 900 },
-  { name: '立定跳遠', unit: '公分', better: 'high', min: 30, max: 300 }
+  { name: '100公尺跑', unit: '秒', better: 'low', min: 8, max: 60 }
 ];
 const METHODS = {
   balanced: { label: '能力均衡（蛇行）', hint: '每組都有快有慢、整體實力相當。適合接力比賽，比賽才公平。', needsValue: true },
@@ -73,11 +72,18 @@ const METHODS = {
   random: { label: '完全隨機', hint: '不看成績，純抽籤。' },
   team: { label: '沿用原本的隊', hint: '照名單裡的隊別分組（兩班合併時，相同隊號併成一組）。' }
 };
+// 第一單元的選手遴選規則：男／女各取幾名、另外不分性別再取幾名（人數可在「選手」分頁直接改）
+const SEL_EVENTS = [
+  { name: '100公尺競賽', boys: 2, girls: 2, any: 0 },
+  { name: '400公尺接力賽', boys: 4, girls: 4, any: 0 },
+  { name: '大隊接力賽', boys: 0, girls: 0, any: 16 }
+];
 const S = { roster: [], classes: [], scores: {}, groupings: null, tab: 'rec',
   rec: { cls: '', item: ITEMS[0].name, date: '', trial: 1 },
   view: { cls: '全部', item: ITEMS[0].name, date: '' },
   grp: { scope: '', item: ITEMS[0].name, basis: 'latest', method: 'balanced', byMode: 'k', k: 4, size: 5, order: 'slow_first', unmeasured: 'spread', absent: new Set(), cur: null },
-  ros: { cls: '' } };
+  ros: { cls: '' },
+  sel: { scope: '每班各自', item: ITEMS[0].name, basis: 'latest', noDup: false, events: SEL_EVENTS.map((e) => Object.assign({}, e)), absent: new Set(), res: null } };
 
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
@@ -111,7 +117,7 @@ function bestMap(rows, it) {
 function go(t) {
   S.tab = t;
   $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
-  ({ rec: viewRec, view: viewScores, grp: viewGroups, ros: viewRoster })[t]().catch((e) => { $('#main').innerHTML = '<div class="notice">讀取失敗：' + esc(e.message) + '</div>'; });
+  ({ rec: viewRec, view: viewScores, sel: viewSelect, grp: viewGroups, ros: viewRoster })[t]().catch((e) => { $('#main').innerHTML = '<div class="notice">讀取失敗：' + esc(e.message) + '</div>'; });
 }
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) go(b.dataset.t); };
 
@@ -221,14 +227,14 @@ async function viewScores() {
 
 /* ===== 3. 分組 ===== */
 // 每個人：{cls, no, team, v}；v 為依「取值方式」算出的成績（沒測過是 null）
-async function peopleFor(G) {
-  const it = itemOf(G.item); const rows = await scoresOf(G.item); const scope = G.scope === '兩班合併' ? S.classes : [G.scope];
+async function peopleFor(G, scopeClasses) {
+  const it = itemOf(G.item); const rows = await scoresOf(G.item); const scope = scopeClasses || (G.scope === '兩班合併' ? S.classes : [G.scope]);
   const per = {}; rows.forEach((r) => { const k = r['班級'] + '-' + r['座號']; const v = Number(r['成績']); const o = (per[k] = per[k] || { byDate: {} }); o.byDate[r['日期']] = o.byDate[r['日期']] == null ? v : better(it, o.byDate[r['日期']], v); });
   const people = [];
   scope.forEach((c) => clsRoster(c).forEach((r) => {
     const k = c + '-' + r['座號']; if (G.absent.has(k)) return; const o = per[k]; let v = null;
     if (o) { const ds = Object.keys(o.byDate).sort(); v = G.basis === 'latest' ? o.byDate[ds[ds.length - 1]] : ds.map((d) => o.byDate[d]).reduce((a, b) => better(it, a, b)); }
-    people.push({ cls: c, no: r['座號'], team: r['隊'], v });
+    people.push({ cls: c, no: r['座號'], team: r['隊'], sex: r['性別'] || '', v });
   }));
   return people;
 }
@@ -294,7 +300,7 @@ async function doGroup() {
   } catch (e) { toast(e.message); }
 }
 function drawSaved() {
-  const box = $('#saved'); if (!box) return; const L = S.groupings || [];
+  const box = $('#saved'); if (!box) return; const L = (S.groupings || []).filter((g) => g.策略 !== '選手遴選');
   box.innerHTML = L.length ? L.map((g) => { const n = new Set(g.members.map((m) => m.組別)).size;
     return '<div class="card"><div class="row" style="justify-content:space-between"><div><b>' + esc(g.名稱) + '</b> <span class="chip">' + esc(g.策略) + '</span><div class="small muted">' + esc(g.日期) + ' · ' + n + ' 組 · ' + g.members.length + ' 人' + (g.備註 ? ' · ' + esc(g.備註) : '') + '</div></div>' +
       '<div class="row"><button class="btn sm" data-load="' + esc(g.id) + '">載入沿用</button><button class="btn sm danger" data-del="' + esc(g.id) + '">刪除</button></div></div></div>'; }).join('') : '<p class="muted">還沒有存過分組。</p>';
@@ -342,19 +348,100 @@ async function viewGroups() {
 /* ===== 4. 名單 ===== */
 async function viewRoster() {
   const Z = S.ros; Z.cls = Z.cls || S.classes[0];
-  $('#main').innerHTML = '<div class="card"><p class="small muted">每班各貼一次。每行一位學生：<code>座號</code>、或 <code>座號,隊</code>、或 <code>座號,隊,暱稱</code>（逗號、Tab 都可以，可直接從 Excel 貼上）。沒寫隊的，依順序每 3 人自動一隊。<b>請用座號或代號，不要貼真實全名。</b>儲存只會取代選的那一班，另一班不動。</p>' +
+  $('#main').innerHTML = '<div class="card"><p class="small muted">每班各貼一次。每行一位學生：<code>座號,性別</code>（性別寫 男 或 女），後面可再加 <code>,隊,暱稱</code>。逗號、Tab 都可以，可直接從 Excel 貼上。例如 <code>1,男</code>、<code>2,女,1</code>。沒寫隊的，依順序每 3 人自動一隊。<b>請用座號或代號，不要貼真實全名。</b>儲存只會取代選的那一班，另一班不動。</p>' +
     '<div class="row"><select id="rc">' + optList(S.classes, Z.cls) + '</select><span class="small muted" id="rn"></span></div>' +
-    '<textarea id="rt" rows="12" style="margin-top:8px" placeholder="1,1&#10;2,1&#10;3,1&#10;4,2"></textarea>' +
+    '<textarea id="rt" rows="12" style="margin-top:8px" placeholder="1,男&#10;2,女&#10;3,男&#10;4,女"></textarea>' +
     '<div class="row" style="margin-top:8px"><button class="btn" id="rs">儲存這一班的名單</button></div></div>';
-  const fill = () => { const L = clsRoster(Z.cls); $('#rt').value = L.map((r) => [r['座號'], r['隊'], r['暱稱']].join(',').replace(/,$/, '')).join('\n'); $('#rn').textContent = '目前 ' + L.length + ' 人'; };
+  const fill = () => { const L = clsRoster(Z.cls); $('#rt').value = L.map((r) => [r['座號'], r['性別'] || '', r['隊'], r['暱稱']].join(',').replace(/,+$/, '')).join('\n');
+    const nb = L.filter((r) => r['性別'] === '男').length, ng = L.filter((r) => r['性別'] === '女').length; $('#rn').textContent = '目前 ' + L.length + ' 人（男 ' + nb + '、女 ' + ng + (L.length - nb - ng ? '、未填性別 ' + (L.length - nb - ng) : '') + '）'; };
   $('#rc').onchange = (e) => { Z.cls = e.target.value; fill(); }; fill();
   $('#rs').onclick = async () => {
     const rows = $('#rt').value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => l.split(/[,\t，]/).map((x) => x.trim()));
-    const roster = rows.map((c, i) => ({ '座號': c[0], '隊': c[1] || Math.ceil((i + 1) / 3), '暱稱': c[2] || '' }));
+    // 欄位：座號、性別（男／女，可空）、隊（可空）、暱稱（可空）；也相容舊格式「座號,隊,暱稱」
+    const roster = rows.map((c, i) => { const hasSex = c[1] === '男' || c[1] === '女' || c[1] === ''; const sex = hasSex ? c[1] : ''; const rest = hasSex ? c.slice(2) : c.slice(1);
+      return { '座號': c[0], '性別': sex, '隊': rest[0] || Math.ceil((i + 1) / 3), '暱稱': rest[1] || '' }; });
     if (!roster.length) return toast('名單是空的'); if (roster.some((r) => !/^\d+$/.test(String(r['座號'])))) return toast('座號必須是數字');
-    if (!confirm('要用這 ' + roster.length + ' 人取代「' + Z.cls + '」目前的名單嗎？')) return;
+    if (roster.some((r) => !/^\d+$/.test(String(r['隊'])))) return toast('隊必須是數字（性別請寫 男 或 女）');
+    const noSex = roster.filter((r) => !r['性別']).length;
+    if (!confirm('要用這 ' + roster.length + ' 人取代「' + Z.cls + '」目前的名單嗎？' + (noSex ? '\n（有 ' + noSex + ' 人沒填性別，選手遴選會略過他們）' : ''))) return;
     try { S.roster = await run('tc_saveRoster', Z.cls, roster); toast('已儲存 ' + roster.length + ' 人'); fill(); } catch (e) { toast('失敗：' + e.message); }
   };
+}
+
+/* ===== 5. 選手遴選：依 100 公尺成績挑人 ===== */
+function pickEvent(pool, ev, taken, noDup) {
+  const key = (p) => p.cls + '-' + p.no, it = itemOf(S.sel.item);
+  const avail = pool.filter((p) => !(noDup && taken.has(key(p))));              // pool 已依成績由好到壞排好
+  const boys = avail.filter((p) => p.sex === '男'), girls = avail.filter((p) => p.sex === '女');
+  const picked = [], alts = [], notes = [];
+  const take = (list, n, tag) => { list.slice(0, n).forEach((p) => picked.push({ p, tag })); list.slice(n, n + 2).forEach((p) => alts.push({ p, tag })); if (list.length < n) notes.push(tag + '只有 ' + list.length + ' 人有成績，缺 ' + (n - list.length) + ' 位');
+    if (n > 0 && list[n - 1] && list[n] && list[n - 1].v === list[n].v) notes.push(tag + '第 ' + n + ' 名與候補同成績（' + fmt(list[n].v, it) + '），請老師決定'); };
+  if (ev.boys > 0) take(boys, ev.boys, '男');
+  if (ev.girls > 0) take(girls, ev.girls, '女');
+  if (ev.any > 0) { const chosen = new Set(picked.map((x) => key(x.p))); take(avail.filter((p) => !chosen.has(key(p))), ev.any, '不分'); }
+  const ord = (a, b) => strength(it, b.p.v) - strength(it, a.p.v); picked.sort(ord); alts.sort(ord);
+  picked.forEach((x) => taken.add(key(x.p)));
+  return { ev, picked, alts, notes };
+}
+async function doSelect() {
+  const G = S.sel, it = itemOf(G.item); const pools = G.scope === '兩班合併' ? [S.classes] : S.classes.map((c) => [c]); const res = [];
+  for (const cs of pools) {
+    const all = await peopleFor(Object.assign({}, G, { absent: G.absent }), cs);
+    const noSex = all.filter((p) => !p.sex).length, noTime = all.filter((p) => p.v == null).length;
+    const pool = all.filter((p) => p.v != null && p.sex).sort((a, b) => strength(it, b.v) - strength(it, a.v));
+    const taken = new Set(); res.push({ label: cs.join('、'), noSex, noTime, total: all.length, events: G.events.map((ev) => pickEvent(pool, ev, taken, G.noDup)) });
+  }
+  G.res = res; showSelect();
+}
+const sexOf = (cls, no) => { const r = S.roster.find((x) => x['班級'] === cls && x['座號'] === no); return r ? r['性別'] : ''; };
+function selHtml(res) {
+  const it = itemOf(S.sel.item);
+  return res.map((r) => '<h2>' + esc(r.label) + '</h2>' + (r.noSex || r.noTime ? '<div class="notice small">' + (r.noSex ? r.noSex + ' 人沒填性別（請到「名單」補）。' : '') + (r.noTime ? r.noTime + ' 人還沒有' + esc(it.name) + '成績。' : '') + '以上的人不會被選入。</div>' : '') +
+    '<div class="grid">' + r.events.map((e) => '<div class="card"><div class="gh"><b>' + esc(e.ev.name) + '</b><span class="small">' + [e.ev.boys ? '男 ' + e.ev.boys : '', e.ev.girls ? '女 ' + e.ev.girls : '', e.ev.any ? '不分性別 ' + e.ev.any : ''].filter(Boolean).join('、') + '</span></div>' +
+      e.notes.map((n) => '<div class="notice small">⚠ ' + esc(n) + '</div>').join('') +
+      '<table><tbody>' + e.picked.map((x, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc(x.p.cls) + ' ' + x.p.no + ' 號</td><td>' + esc(x.p.sex) + '</td><td><b>' + fmt(x.p.v, it) + '</b></td></tr>').join('') + '</tbody></table>' +
+      (e.alts.length ? '<div class="small muted" style="margin-top:6px">候補：' + e.alts.map((x) => esc(x.p.cls) + ' ' + x.p.no + ' 號(' + esc(x.p.sex) + ' ' + fmt(x.p.v, it) + ')').join('、') + '</div>' : '') + '</div>').join('') + '</div>').join('');
+}
+function showSelect() {
+  const G = S.sel; if (!G.res) { $('#sres').innerHTML = ''; return; }
+  $('#sres').innerHTML = selHtml(G.res) + '<div class="card noprint"><div class="row"><div class="f"><label>名單名稱</label><input id="sn" size="24" value="運動會選手 ' + today().slice(5) + '"></div></div>' +
+    '<div class="row" style="margin-top:10px"><button class="btn" id="ssv">儲存這份選手名單</button><button class="btn ghost" id="spr">列印</button></div></div>';
+  $('#spr').onclick = () => window.print();
+  $('#ssv').onclick = async () => {
+    const members = [], labels = []; G.res.forEach((r) => r.events.forEach((e) => { labels.push(r.label + ' ' + e.ev.name); const gi = labels.length; e.picked.forEach((x) => members.push({ 組別: gi, 班級: x.p.cls, 座號: x.p.no, 棒次: '', 成績: x.p.v })); }));
+    if (!members.length) return toast('目前沒有任何入選的人');
+    $('#ssv').disabled = true;
+    try { S.groupings = await run('tc_saveGrouping', { 名稱: $('#sn').value.trim() || '運動會選手', 日期: today(), 策略: '選手遴選', 備註: G.scope + '；' + (G.basis === 'latest' ? '最近一次' : '歷史最好'),
+      參數: JSON.stringify({ labels, item: G.item, scope: G.scope, basis: G.basis, noDup: G.noDup, events: G.events }), members }); toast('已儲存'); drawSelSaved(); } catch (e) { toast('失敗：' + e.message); }
+    $('#ssv').disabled = false;
+  };
+}
+function drawSelSaved() {
+  const box = $('#ssaved'); if (!box) return; const L = (S.groupings || []).filter((g) => g.策略 === '選手遴選'); const it = itemOf(S.sel.item);
+  box.innerHTML = L.length ? L.map((g) => { let P = {}; try { P = JSON.parse(g.參數 || '{}'); } catch (e) { /* 舊資料 */ } const by = {}; g.members.forEach((m) => { (by[m.組別] = by[m.組別] || []).push(m); });
+    return '<div class="card"><div class="row" style="justify-content:space-between"><div><b>' + esc(g.名稱) + '</b> <span class="small muted">' + esc(g.日期) + ' · ' + esc(g.備註 || '') + '</span></div><button class="btn sm danger noprint" data-sdel="' + esc(g.id) + '">刪除</button></div>' +
+      Object.keys(by).sort((a, b) => a - b).map((k) => '<div class="small" style="margin-top:6px"><b>' + esc((P.labels || [])[k - 1] || '第 ' + k + ' 組') + '</b>：' + by[k].map((m) => m.座號 + '號(' + esc(sexOf(m.班級, m.座號)) + ')' + (m.成績 === '' ? '' : ' ' + fmt(m.成績, it))).join('、') + '</div>').join('') + '</div>'; }).join('') : '<p class="muted">還沒有存過。</p>';
+  $$('[data-sdel]', box).forEach((b) => { b.onclick = async () => { if (!confirm('確定刪除這份選手名單？')) return; try { S.groupings = await run('tc_deleteGrouping', b.dataset.sdel); drawSelSaved(); } catch (e) { toast(e.message); } }; });
+}
+async function viewSelect() {
+  const G = S.sel; if (!S.groupings) S.groupings = await run('tc_getGroupings'); await scoresOf(G.item);
+  const cs = S.classes; const noSexAll = S.roster.filter((r) => !r['性別']).length;
+  const absentBox = cs.map((c) => '<div class="small"><b>' + esc(c) + '</b>：' + clsRoster(c).map((r) => { const k = c + '-' + r['座號']; return '<label class="abs"><input type="checkbox" data-abs="' + k + '"' + (G.absent.has(k) ? ' checked' : '') + '>' + r['座號'] + '</label>'; }).join('') + '</div>').join('');
+  $('#main').innerHTML = (noSexAll ? '<div class="notice">名單裡有 ' + noSexAll + ' 人還沒填性別，選手遴選會略過他們。請到「名單」分頁補上（格式：座號,性別）。</div>' : '') +
+    '<div class="card noprint"><h3>遴選規則</h3><div class="row"><div class="f"><label>範圍</label><select id="ss"><option' + (G.scope === '每班各自' ? ' selected' : '') + '>每班各自</option><option' + (G.scope === '兩班合併' ? ' selected' : '') + '>兩班合併</option></select></div>' +
+    '<div class="f"><label>依據成績</label><select id="sb"><option value="latest"' + (G.basis === 'latest' ? ' selected' : '') + '>每人最近一次 ' + esc(G.item) + '</option><option value="best"' + (G.basis === 'best' ? ' selected' : '') + '>每人歷史最好</option></select></div></div>' +
+    '<div class="scroll" style="margin-top:8px"><table><thead><tr><th>項目</th><th>男生取</th><th>女生取</th><th>不分性別另取</th></tr></thead><tbody>' + G.events.map((e, i) => '<tr><td>' + esc(e.name) + '</td>' +
+      ['boys', 'girls', 'any'].map((k) => '<td><input type="number" min="0" max="40" data-ev="' + i + '" data-k="' + k + '" value="' + e[k] + '" style="width:5em"></td>').join('') + '</tr>').join('') + '</tbody></table></div>' +
+    '<label class="abs" style="margin-top:8px"><input type="checkbox" id="nd"' + (G.noDup ? ' checked' : '') + '>同一個人不重複入選（由上到下依序挑：先 100 公尺競賽、再 400 公尺接力、最後大隊接力）</label>' +
+    '<details style="margin-top:6px"><summary>受傷／請假、不參加的人（勾選的不會被挑）</summary><div>' + absentBox + '</div></details>' +
+    '<div style="margin-top:12px"><button class="btn" id="smk">挑選</button></div></div><div id="sres"></div><h2 class="noprint">已存的選手名單</h2><div id="ssaved" class="noprint"></div>';
+  $('#ss').onchange = (e) => { G.scope = e.target.value; G.res = null; showSelect(); };
+  $('#sb').onchange = (e) => { G.basis = e.target.value; };
+  $('#nd').onchange = (e) => { G.noDup = e.target.checked; };
+  $$('[data-ev]').forEach((i) => { i.onchange = () => { G.events[+i.dataset.ev][i.dataset.k] = Math.max(0, Math.round(Number(i.value) || 0)); }; });
+  $('#main').onchange = (e) => { const k = e.target.dataset && e.target.dataset.abs; if (!k) return; if (e.target.checked) G.absent.add(k); else G.absent.delete(k); };
+  $('#smk').onclick = () => doSelect().catch((e) => toast(e.message));
+  showSelect(); drawSelSaved();
 }
 
 /* ===== 啟動 ===== */
