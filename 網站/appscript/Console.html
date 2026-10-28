@@ -422,12 +422,12 @@ function drawDetail(T, rows) {
   $('#cl').onclick = () => { Z.sel = null; box.innerHTML = ''; $$('tr.pick').forEach((r) => r.classList.remove('sel')); };
 }
 
-/* ===== 2c. 運動會選手：100 公尺競賽（每班 2 男 2 女）、400 公尺接力（4 男 4 女）、班級接力（16 人不分性別），依成績挑人，可彈性調整 ===== */
+/* ===== 2c. 運動會選手：100 公尺競賽（每班 2 男 2 女）、400 公尺接力（4 男 4 女）、大隊接力（全班最快 16 人），依成績挑人，可彈性調整 ===== */
 // 運動會賽制（甲班、乙班互相 PK，各班各自挑人）。全班 80 公尺不用排隊型，這裡不處理。
 const PRESETS = {
   sprint: { label: '100公尺競賽（每班 2 男 2 女）', nM: 2, nF: 2, rM: 2, rF: 2, legs: false, any: false, defItem: '100公尺跑' },
   relay: { label: '400公尺接力（男子組 4 人、女子組 4 人）', nM: 4, nF: 4, rM: 2, rF: 2, legs: true, any: false, byGroup: true, dist: 400, defItem: '100公尺跑' },
-  classRelay: { label: '班級接力（每班 16 人，不分性別）', nA: 16, rA: 2, legs: true, any: true, defItem: '100公尺跑' },
+  classRelay: { label: '大隊接力（全班最快 16 人，不分性別）', nA: 16, rA: 2, legs: true, any: true, defItem: '100公尺跑' },
   custom: { label: '自訂賽事', nM: 2, nF: 2, rM: 1, rF: 1, legs: false, any: false, defItem: '100公尺跑' }
 };
 const ORDERS = {
@@ -522,7 +522,7 @@ async function viewEvents() {
     (P.legs ? (P.any || P.byGroup ? '' : '<div class="f"><label>棒次排法</label><select id="eo">' + Object.entries(ORDERS).map(([k, v]) => '<option value="' + k + '"' + (E.order === k ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select></div>') +
       '<div class="f"><label>壓軸</label><select id="ea"><option value="slow_first"' + (E.anchor === 'slow_first' ? ' selected' : '') + '>最快的跑最後一棒</option><option value="fast_first"' + (E.anchor === 'fast_first' ? ' selected' : '') + '>最快的跑第一棒</option></select></div>' : '') + '</div>' +
     (noData ? '<div class="notice small">「' + esc(E.item) + '」還沒有任何成績，會隨機挑人。建議先到「登記成績」測一次，或改用已有成績的項目（例如 100公尺跑）。' + (E.item === '80公尺跑' ? '' : '') + '</div>' : (P.defItem !== E.item ? '<div class="notice small">目前用「' + esc(E.item) + '」當依據（' + esc(P.defItem) + ' 還沒有成績）。測了 ' + esc(P.defItem) + ' 之後可以改選它再重新產生。</div>' : '')) +
-    '<p class="small muted" style="margin:8px 0 0">各班：' + S.classes.map((c) => esc(c) + '（' + sexCount(c) + '）').join('　') + (P.byGroup ? '。男子組 ' + E.nM + ' 人一隊、女子組 ' + E.nF + ' 人一隊，每隊跑 ' + P.dist + ' 公尺（每棒約 ' + (Math.round(P.dist / Math.max(1, E.nM, E.nF) * 10) / 10) + ' 公尺）。' : P.dist ? '。' + P.dist + ' 公尺接力＝' + (E.nM + E.nF) + ' 棒 × 約 ' + (Math.round(P.dist / Math.max(1, E.nM + E.nF) * 10) / 10) + ' 公尺。' : P.any ? '。班級接力＝' + E.nA + ' 人，不分性別，純看速度排棒次。' : '。') + (P.any ? '' : '性別在「名單」分頁填。') + '</p></div>' +
+    '<p class="small muted" style="margin:8px 0 0">各班：' + S.classes.map((c) => esc(c) + '（' + sexCount(c) + '）').join('　') + (P.byGroup ? '。男子組 ' + E.nM + ' 人一隊、女子組 ' + E.nF + ' 人一隊，每隊跑 ' + P.dist + ' 公尺（每棒約 ' + (Math.round(P.dist / Math.max(1, E.nM, E.nF) * 10) / 10) + ' 公尺）。' : P.dist ? '。' + P.dist + ' 公尺接力＝' + (E.nM + E.nF) + ' 棒 × 約 ' + (Math.round(P.dist / Math.max(1, E.nM + E.nF) * 10) / 10) + ' 公尺。' : P.any ? '。大隊接力＝' + E.nA + ' 人，不分性別，純看速度排棒次。' : '。') + (P.any ? '' : '性別在「名單」分頁填。') + '</p></div>' +
     '<div class="card"><h3>2. 例外（選填）</h3><details' + (E.absent.size ? ' open' : '') + '><summary>不參加／受傷／請假（勾選的不會被挑）</summary>' + S.classes.map((c) => '<div class="small"><b>' + esc(c) + '</b>：' + chk(E.absent, 'abs', c) + '</div>').join('') + '</details>' +
     '<details style="margin-top:6px"' + (E.pin.size ? ' open' : '') + '><summary>一定要上場（勾選的優先入選）</summary>' + S.classes.map((c) => '<div class="small"><b>' + esc(c) + '</b>：' + chk(E.pin, 'pin', c) + '</div>').join('') + '</details>' +
     '<div style="margin-top:12px"><button class="btn" id="emk">' + (E.cur ? '重新產生名單' : '產生名單') + '</button></div></div>' +
