@@ -426,7 +426,7 @@ function drawDetail(T, rows) {
 // 運動會賽制（甲班、乙班互相 PK，各班各自挑人）。全班 80 公尺不用排隊型，這裡不處理。
 const PRESETS = {
   sprint: { label: '100公尺競賽（每班 2 男 2 女）', nM: 2, nF: 2, rM: 2, rF: 2, legs: false, any: false, defItem: '100公尺跑' },
-  relay: { label: '400公尺接力（每班 4 男 4 女）', nM: 4, nF: 4, rM: 2, rF: 2, legs: true, any: false, dist: 400, defItem: '100公尺跑' },
+  relay: { label: '400公尺接力（男子組 4 人、女子組 4 人）', nM: 4, nF: 4, rM: 2, rF: 2, legs: true, any: false, byGroup: true, dist: 400, defItem: '100公尺跑' },
   classRelay: { label: '班級接力（每班 16 人，不分性別）', nA: 16, rA: 2, legs: true, any: true, defItem: '100公尺跑' },
   custom: { label: '自訂賽事', nM: 2, nF: 2, rM: 1, rF: 1, legs: false, any: false, defItem: '100公尺跑' }
 };
@@ -441,10 +441,13 @@ function evAll(E, per) {                               // 每班每個人 + 依�
     return { cls: c, no: r['座號'], team: r['隊'], sex: sexOf(r), v: s ? (E.basis === 'best' ? s.best : s.latest) : null }; }); });
   return res;
 }
+// 棒次：男女分組的賽事（400公尺接力）男子組、女子組各自從 1 算起
+const legNo = (P, legs, i) => P.byGroup ? legs.slice(0, i + 1).filter((q) => q.sex === legs[i].sex).length : i + 1;
 const evOrd = (it, list) => list.filter((p) => p.v != null).sort((a, b) => strength(it, b.v) - strength(it, a.v)).concat(shuffle(list.filter((p) => p.v == null)));
 function evLegs(E, it, M, F) {
   const P = PRESETS[E.preset], dir = (arr) => arr.slice().sort((a, b) => { const sa = a.v == null ? -Infinity : strength(it, a.v), sb = b.v == null ? -Infinity : strength(it, b.v); if (sa === sb) return 0; return E.anchor === 'slow_first' ? (sa < sb ? -1 : 1) : (sa < sb ? 1 : -1); });
   if (P.any) return dir(M.concat(F));
+  if (P.byGroup) return dir(M).concat(dir(F));          // 男子組一隊、女子組一隊，各自 1–4 棒
   if (!P.legs) { const fast = (arr) => evOrd(it, arr.filter((p) => p.v != null)).concat(arr.filter((p) => p.v == null)); return fast(M).concat(fast(F)); }
   const m = dir(M), f = dir(F), weave = (a, b) => { const o = []; for (let i = 0; i < Math.max(a.length, b.length); i++) { if (a[i]) o.push(a[i]); if (b[i]) o.push(b[i]); } return o; };
   if (E.order === 'alt_m') return weave(m, f);
@@ -481,7 +484,7 @@ const evParams = (E) => JSON.stringify({ preset: E.preset, nM: E.nM, nF: E.nF, r
 function evMembers(cur) {
   const out = [];
   Object.keys(cur.res).forEach((c) => { const R = cur.res[c], legs = PRESETS[cur.E.preset].legs;
-    R.legs.forEach((p, i) => out.push({ 班級: c, 座號: p.no, 性別: p.sex, 角色: '正選', 棒次: legs ? i + 1 : '', 成績: p.v == null ? '' : p.v }));
+    R.legs.forEach((p, i) => out.push({ 班級: c, 座號: p.no, 性別: p.sex, 角色: '正選', 棒次: legs ? legNo(PRESETS[cur.E.preset], R.legs, i) : '', 成績: p.v == null ? '' : p.v }));
     R.reserve.forEach((p) => out.push({ 班級: c, 座號: p.no, 性別: p.sex, 角色: '候補', 棒次: '', 成績: p.v == null ? '' : p.v })); });
   return out;
 }
@@ -496,11 +499,11 @@ function evCard(cur, c, it) {
   return '<div class="card" data-c="' + esc(c) + '"><div class="gh"><b>' + esc(c) + '　' + esc(P.label.replace(/（.*/, '')) + '</b><span class="small">' + (P.any ? R.legs.length + ' 人（男 ' + sexN('男') + '／女 ' + sexN('女') + '）' : '男 ' + sexN('男') + '／女 ' + sexN('女')) + (vs.length ? '　選手平均 ' + fmt(mean(vs), it) + ' ' + it.unit : '') + '</span></div>' +
     (R.warn.length ? '<div class="notice small">' + R.warn.map(esc).join('<br>') + '</div>' : '') +
     '<div class="scroll"><table class="evtbl"><thead><tr>' + (P.legs ? '<th>棒次</th>' : '') + '<th>性別</th><th>座號</th><th>隊</th><th>' + esc(cur.E.item) + '</th><th>' + (P.any ? '全班名次' : '同性別名次') + '</th>' + (P.legs ? '<th>順序</th>' : '') + '<th>調整</th></tr></thead><tbody>' +
-    R.legs.map((p, i) => '<tr>' + (P.legs ? '<td><span class="leg">' + (i + 1) + '</span></td>' : '') + '<td>' + sexTag(p.sex) + '</td><td><b>' + p.no + '</b></td><td>' + p.team + '</td><td>' + (p.v == null ? '<span class="muted">未測</span>' : '<b>' + fmt(p.v, it) + '</b> <span class="small muted">' + it.unit + '</span>') + '</td><td>' + rankIn(p) + '</td>' +
-      (P.legs ? '<td style="white-space:nowrap"><button class="btn sm ghost iconbtn" data-up="' + i + '"' + (i === 0 ? ' disabled' : '') + ' aria-label="往前">↑</button> <button class="btn sm ghost iconbtn" data-dn="' + i + '"' + (i === R.legs.length - 1 ? ' disabled' : '') + ' aria-label="往後">↓</button></td>' : '') +
+    R.legs.map((p, i) => '<tr>' + (P.legs ? '<td><span class="leg">' + legNo(P, R.legs, i) + '</span></td>' : '') + '<td>' + sexTag(p.sex) + '</td><td><b>' + p.no + '</b></td><td>' + p.team + '</td><td>' + (p.v == null ? '<span class="muted">未測</span>' : '<b>' + fmt(p.v, it) + '</b> <span class="small muted">' + it.unit + '</span>') + '</td><td>' + rankIn(p) + '</td>' +
+      (P.legs ? '<td style="white-space:nowrap"><button class="btn sm ghost iconbtn" data-up="' + i + '"' + (i === 0 || (P.byGroup && R.legs[i - 1].sex !== p.sex) ? ' disabled' : '') + ' aria-label="往前">↑</button> <button class="btn sm ghost iconbtn" data-dn="' + i + '"' + (i === R.legs.length - 1 || (P.byGroup && R.legs[i + 1].sex !== p.sex) ? ' disabled' : '') + ' aria-label="往後">↓</button></td>' : '') +
       '<td><select data-sw="' + i + '" aria-label="換人">' + options(p) + '</select></td></tr>').join('') + '</tbody></table></div>' +
     '<div style="margin-top:8px"><b class="small">候補：</b>' + (R.reserve.length ? R.reserve.map((p) => '<span class="tag">' + sexTag(p.sex) + p.no + ' 號　' + (p.v == null ? '未測' : fmt(p.v, it)) + '</span>').join(' ') : '<span class="muted small">沒有（可在上方把候補人數調大後重新產生）</span>') + '</div>' +
-    (P.legs ? '<p class="small muted" style="margin:6px 0 0">共 ' + R.legs.length + ' 棒' + (P.dist ? '，每棒約 ' + (Math.round(P.dist / R.legs.length * 10) / 10) + ' 公尺' : '') + '。↑↓ 調整棒次；「換人」選候補或其他' + (P.any ? '' : '同性別') + '同學，被換下的人自動變候補。</p>' : '') + '</div>';
+    (P.legs ? '<p class="small muted" style="margin:6px 0 0">' + (P.byGroup ? '男子組 ' + sexN('男') + ' 棒、女子組 ' + sexN('女') + ' 棒各自一隊，每隊 ' + P.dist + ' 公尺（每棒約 ' + (Math.round(P.dist / Math.max(1, sexN('男'), sexN('女')) * 10) / 10) + ' 公尺）' : '共 ' + R.legs.length + ' 棒' + (P.dist ? '，每棒約 ' + (Math.round(P.dist / R.legs.length * 10) / 10) + ' 公尺' : '')) + '。↑↓ 調整棒次；「換人」選候補或其他' + (P.any ? '' : '同性別') + '同學，被換下的人自動變候補。</p>' : '') + '</div>';
 }
 async function viewEvents() {
   const E = S.evt; const per = await perScores();
@@ -516,10 +519,10 @@ async function viewEvents() {
     (P.any ? num('ena', E.nA, '正選人數（不分性別）') + num('era', E.rA, '候補人數') : num('enm', E.nM, '男生正選') + num('enf', E.nF, '女生正選') + num('erm', E.rM, '男生候補') + num('erf', E.rF, '女生候補')) + '</div>' +
     '<div class="row" style="margin-top:8px"><div class="f"><label>依據的成績項目</label><select id="ei">' + optList(ITEMS.map((i) => i.name), E.item) + '</select></div>' +
     '<div class="f"><label>取哪個成績</label><select id="eb"><option value="best"' + (E.basis === 'best' ? ' selected' : '') + '>每人歷史最好</option><option value="latest"' + (E.basis === 'latest' ? ' selected' : '') + '>每人最近一次測驗</option></select></div>' +
-    (P.legs ? (P.any ? '' : '<div class="f"><label>棒次排法</label><select id="eo">' + Object.entries(ORDERS).map(([k, v]) => '<option value="' + k + '"' + (E.order === k ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select></div>') +
+    (P.legs ? (P.any || P.byGroup ? '' : '<div class="f"><label>棒次排法</label><select id="eo">' + Object.entries(ORDERS).map(([k, v]) => '<option value="' + k + '"' + (E.order === k ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select></div>') +
       '<div class="f"><label>壓軸</label><select id="ea"><option value="slow_first"' + (E.anchor === 'slow_first' ? ' selected' : '') + '>最快的跑最後一棒</option><option value="fast_first"' + (E.anchor === 'fast_first' ? ' selected' : '') + '>最快的跑第一棒</option></select></div>' : '') + '</div>' +
     (noData ? '<div class="notice small">「' + esc(E.item) + '」還沒有任何成績，會隨機挑人。建議先到「登記成績」測一次，或改用已有成績的項目（例如 100公尺跑）。' + (E.item === '80公尺跑' ? '' : '') + '</div>' : (P.defItem !== E.item ? '<div class="notice small">目前用「' + esc(E.item) + '」當依據（' + esc(P.defItem) + ' 還沒有成績）。測了 ' + esc(P.defItem) + ' 之後可以改選它再重新產生。</div>' : '')) +
-    '<p class="small muted" style="margin:8px 0 0">各班：' + S.classes.map((c) => esc(c) + '（' + sexCount(c) + '）').join('　') + (P.dist ? '。' + P.dist + ' 公尺接力＝' + (E.nM + E.nF) + ' 棒 × 約 ' + (Math.round(P.dist / Math.max(1, E.nM + E.nF) * 10) / 10) + ' 公尺。' : P.any ? '。班級接力＝' + E.nA + ' 人，不分性別，純看速度排棒次。' : '。') + (P.any ? '' : '性別在「名單」分頁填。') + '</p></div>' +
+    '<p class="small muted" style="margin:8px 0 0">各班：' + S.classes.map((c) => esc(c) + '（' + sexCount(c) + '）').join('　') + (P.byGroup ? '。男子組 ' + E.nM + ' 人一隊、女子組 ' + E.nF + ' 人一隊，每隊跑 ' + P.dist + ' 公尺（每棒約 ' + (Math.round(P.dist / Math.max(1, E.nM, E.nF) * 10) / 10) + ' 公尺）。' : P.dist ? '。' + P.dist + ' 公尺接力＝' + (E.nM + E.nF) + ' 棒 × 約 ' + (Math.round(P.dist / Math.max(1, E.nM + E.nF) * 10) / 10) + ' 公尺。' : P.any ? '。班級接力＝' + E.nA + ' 人，不分性別，純看速度排棒次。' : '。') + (P.any ? '' : '性別在「名單」分頁填。') + '</p></div>' +
     '<div class="card"><h3>2. 例外（選填）</h3><details' + (E.absent.size ? ' open' : '') + '><summary>不參加／受傷／請假（勾選的不會被挑）</summary>' + S.classes.map((c) => '<div class="small"><b>' + esc(c) + '</b>：' + chk(E.absent, 'abs', c) + '</div>').join('') + '</details>' +
     '<details style="margin-top:6px"' + (E.pin.size ? ' open' : '') + '><summary>一定要上場（勾選的優先入選）</summary>' + S.classes.map((c) => '<div class="small"><b>' + esc(c) + '</b>：' + chk(E.pin, 'pin', c) + '</div>').join('') + '</details>' +
     '<div style="margin-top:12px"><button class="btn" id="emk">' + (E.cur ? '重新產生名單' : '產生名單') + '</button></div></div>' +
@@ -561,7 +564,7 @@ function drawEvRes() {
   };
   $('#epr').onclick = () => window.print();
   $('#ecsv').onclick = () => { const rows = [['賽事', '班級', '角色', '棒次', '座號', '隊', '性別', cur.E.item + '(' + it.unit + ')']];
-    Object.keys(cur.res).forEach((c) => { const R = cur.res[c]; const team = (p) => p.team; R.legs.forEach((p, i) => rows.push([cur.title, c, '正選', P.legs ? i + 1 : '', p.no, team(p), p.sex, p.v == null ? '' : p.v])); R.reserve.forEach((p) => rows.push([cur.title, c, '候補', '', p.no, team(p), p.sex, p.v == null ? '' : p.v])); });
+    Object.keys(cur.res).forEach((c) => { const R = cur.res[c]; const team = (p) => p.team; R.legs.forEach((p, i) => rows.push([cur.title, c, '正選', P.legs ? legNo(P, R.legs, i) : '', p.no, team(p), p.sex, p.v == null ? '' : p.v])); R.reserve.forEach((p) => rows.push([cur.title, c, '候補', '', p.no, team(p), p.sex, p.v == null ? '' : p.v])); });
     const t = '﻿' + rows.map((a) => a.map((x) => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"').join(',')).join('\r\n'); const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([t], { type: 'text/csv' })); a.download = cur.title + '.csv'; a.click(); };
 }
 function drawEvSaved() {
@@ -575,7 +578,7 @@ function drawEvSaved() {
     E.absent = new Set(); E.pin = new Set(); const per = await perScores(), all = evAll(E, per), res = {};
     S.classes.forEach((c) => { const mem = g.members.filter((m) => m.班級 === c); if (!mem.length) { res[c] = { legs: [], reserve: [], warn: [] }; return; }
       const get = (m) => all[c].find((p) => p.no === m.座號) || { cls: c, no: m.座號, team: '', sex: m.性別, v: m.成績 === '' ? null : m.成績 };
-      res[c] = { legs: mem.filter((m) => m.角色 === '正選').sort((a, b) => (a.棒次 || 99) - (b.棒次 || 99)).map(get), reserve: mem.filter((m) => m.角色 === '候補').map(get), warn: [] }; });
+      res[c] = { legs: mem.filter((m) => m.角色 === '正選').sort((a, b) => (PRESETS[E.preset].byGroup ? (a.性別 === b.性別 ? 0 : a.性別 === '男' ? -1 : 1) : 0) || (a.棒次 || 99) - (b.棒次 || 99)).map(get), reserve: mem.filter((m) => m.角色 === '候補').map(get), warn: [] }; });
     E.cur = { title: g.名稱, E: Object.assign({}, E, { absent: new Set(), pin: new Set() }), res, all }; E.saved = S.evt.saved; viewEvents(); toast('已載入「' + g.名稱 + '」，可直接調整');
   }; });
   $$('[data-edel]', box).forEach((b) => { b.onclick = async () => { if (!confirm('確定刪除這份名單？')) return; try { S.evt.saved = await run('tc_deleteEntry', b.dataset.edel); drawEvSaved(); } catch (e) { toast(e.message); } }; });
