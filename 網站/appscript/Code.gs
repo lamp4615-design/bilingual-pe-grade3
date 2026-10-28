@@ -11,7 +11,7 @@
 
 const SHEET = {
   roster: '學生名單', assess: '學生評量', weak: '不熟悉清單',
-  taught: '教學進度', reflect: '教學省思', review: '複習排程', scores: '體育成績', groups: '分組紀錄', tgrade: '教師評量'
+  taught: '教學進度', reflect: '教學省思', review: '複習排程', scores: '體育成績', groups: '分組紀錄', tgrade: '教師評量', entries: '賽事選手'
 };
 const CLASSES = ['甲班', '乙班'];
 const HEADERS = {
@@ -23,7 +23,8 @@ const HEADERS = {
   '複習排程': ['單元', '節', '項目', '下次複習日', '次數'],
   '體育成績': ['日期', '班級', '項目', '座號', '次別', '成績', '單位', '備註', '登錄時間'],
   '教師評量': ['時間', '單元', '節', '班級', '座號', '項目', '等第', '備註'],
-  '分組紀錄': ['分組ID', '建立時間', '名稱', '日期', '策略', '參數', '備註', '組別', '班級', '座號', '棒次', '成績']
+  '分組紀錄': ['分組ID', '建立時間', '名稱', '日期', '策略', '參數', '備註', '組別', '班級', '座號', '棒次', '成績'],
+  '賽事選手': ['名單ID', '建立時間', '名稱', '賽事', '參數', '備註', '班級', '座號', '性別', '角色', '棒次', '成績']
 };
 
 /** 第一次使用：在 Apps Script 編輯器執行一次 setup()，會建立所有工作表與表頭。 */
@@ -85,7 +86,7 @@ function doPost(e) {
     const req = JSON.parse(e.postData.contents);
     const p = req.payload || {};
     const studentOK = !!req.classCode && req.classCode === PropertiesService.getScriptProperties().getProperty('CLASS_CODE');
-    const studentActions = { roster: roster_, submitAssessment: submitAssessment_ };
+    const studentActions = { roster: rosterForStudents_, submitAssessment: submitAssessment_ };
     if (req.action === 'ping') return out({ ok: true, data: { role: studentOK ? 'student' : 'none' } });
     if (studentActions[req.action] && studentOK) return out({ ok: true, data: studentActions[req.action](p) });
     return out({ ok: false, error: '沒有權限或未知的動作：' + req.action });
@@ -110,7 +111,16 @@ function now_() { return Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-M
 function today_() { return Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy-MM-dd'); }
 
 /* ---------- 學生（iPad） ---------- */
-function roster_() { return rows_(SHEET.roster).map(function (r) { r['班級'] = r['班級'] || CLASSES[0]; return r; }); }
+function roster_() { return rows_(SHEET.roster).map(function (r) { r['班級'] = r['班級'] || CLASSES[0]; r['性別'] = r['性別'] || ''; return r; }); }
+/** 學生端只拿得到座號、隊、暱稱、班級；性別只給老師後台（選運動會選手用）。 */
+function rosterForStudents_() { return roster_().map(function (r) { return { '座號': r['座號'], '隊': r['隊'], '暱稱': r['暱稱'], '班級': r['班級'] }; }); }
+function sex_(v) {
+  const t = String(v == null ? '' : v).trim().toLowerCase();
+  if (!t) return '';
+  if (['男', 'm', 'male', 'boy', '男生'].indexOf(t) >= 0) return '男';
+  if (['女', 'f', 'female', 'girl', '女生'].indexOf(t) >= 0) return '女';
+  throw new Error('性別只能填「男」或「女」（收到：' + v + '）');
+}
 
 function submitAssessment_(p) {
   const grade = Number(p.等第);
@@ -190,10 +200,10 @@ function saveReflection_(p) {
 function getReflections_(p) { return rows_(SHEET.reflect).filter(function (r) { return !p.單元 || r.單元 === p.單元; }); }
 
 /* ---------- 老師：學生名單 ---------- */
-/* 只取代 p.班級 這一班的名單，另一班不動。p.roster = [{座號, 隊, 暱稱, 性別}] */
+/* 只取代 p.班級 這一班的名單，另一班不動。p.roster = [{座號, 隊, 暱稱, 性別}]（性別選填：男／女） */
 function saveRoster_(p) {
   if (CLASSES.indexOf(p.班級) < 0) throw new Error('班級必須是 ' + CLASSES.join(' 或 '));
-  const mine = (p.roster || []).map(function (r) { return { 座號: Number(r.座號), 隊: Number(r.隊), 暱稱: String(r.暱稱 || ''), 班級: p.班級, 性別: String(r.性別 || '') }; });
+  const mine = (p.roster || []).map(function (r) { return { 座號: Number(r.座號), 隊: Number(r.隊), 暱稱: String(r.暱稱 || ''), 班級: p.班級, 性別: sex_(r.性別) }; });
   const seen = {};
   mine.forEach(function (r) {
     if (!(r.座號 > 0) || !(r.隊 > 0)) throw new Error('座號與隊必須是正整數（座號 ' + r.座號 + '）');
@@ -252,6 +262,15 @@ function tc_init() { assertOwner_(); return { roster: roster_(), classes: CLASSE
 function tc_getScores(item) { assertOwner_(); return getScores_({ '項目': item }); }
 function tc_saveScores(items) { assertOwner_(); return saveScores_({ items: items }); }
 function tc_saveRoster(cls, roster) { assertOwner_(); return saveRoster_({ '班級': cls, roster: roster }); }
+/* 每位學生的自評／同儕評量原始紀錄（一筆一列，由後台自己整理成個人表現）。
+   欄位順序：[時間, 單元, 節, 類型, 評量者座號, 被評者座號(自評為0), 項目, 等第(1-3), 鼓勵語]。只回最近 4000 筆。 */
+function tc_studentAssess(cls) {
+  assertOwner_();
+  return rows_(SHEET.assess).filter(function (r) { return (r['班級'] || CLASSES[0]) === cls; }).map(function (r) {
+    return [String(plain_(r['時間'])), String(r['單元']), Number(r['節']), String(r['類型']), Number(r['評量者座號']),
+      r['被評者座號'] === '' ? 0 : Number(r['被評者座號']), String(r['項目']), Number(r['等第']), String(r['鼓勵語'] || '')];
+  }).slice(-4000);
+}
 function tc_assessSummary(cls) { assertOwner_(); const r = assessSummary_({ '班級': cls }); delete r.recent; return r; }
 
 /* 分組紀錄：一次分組存成多列（每位學生一列），用「分組ID」串起來，下一堂課可以直接叫出來沿用。 */
@@ -335,4 +354,47 @@ function tc_saveTeacherGrades(p) {
     });
   } finally { lock.releaseLock(); }
   return tc_getTeacherGrades({ 單元: p.單元, 節: p.節, 班級: p.班級 });
+}
+
+/* ---------- 運動會選手名單（400 公尺接力、80 公尺…）：一次存成多列，用「名單ID」串起來，可隨時叫出來調整 ---------- */
+function tc_getEntries() {
+  assertOwner_();
+  const by = {}, order = [];
+  rows_(SHEET.entries).forEach(function (r) {
+    const id = r['名單ID'];
+    if (!by[id]) {
+      by[id] = { id: id, 建立時間: String(plain_(r['建立時間'])), 名稱: r['名稱'], 賽事: r['賽事'], 參數: r['參數'], 備註: r['備註'], members: [] };
+      order.push(id);
+    }
+    by[id].members.push({ 班級: r['班級'], 座號: Number(r['座號']), 性別: r['性別'], 角色: r['角色'], 棒次: r['棒次'] === '' ? '' : Number(r['棒次']), 成績: r['成績'] === '' ? '' : Number(r['成績']) });
+  });
+  return order.reverse().slice(0, 30).map(function (id) { return by[id]; });
+}
+function tc_saveEntry(g) {
+  assertOwner_();
+  if (!g || !g.members || !g.members.length) throw new Error('沒有任何選手可以儲存');
+  g.members.forEach(function (m) {
+    if (CLASSES.indexOf(m.班級) < 0) throw new Error('班級必須是 ' + CLASSES.join(' 或 '));
+    if (['正選', '候補'].indexOf(m.角色) < 0) throw new Error('角色必須是 正選 或 候補');
+  });
+  const lock = LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    const sh = sheet_(SHEET.entries), h = HEADERS[SHEET.entries];
+    const id = 'E' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMddHHmmss');
+    const rows = g.members.map(function (m) {
+      return [id, now_(), String(g.名稱 || '').slice(0, 40), String(g.賽事 || '').slice(0, 40), String(g.參數 || ''), String(g.備註 || '').slice(0, 100),
+        String(m.班級), Number(m.座號), sex_(m.性別), String(m.角色), m.棒次 === '' || m.棒次 == null ? '' : Number(m.棒次), m.成績 === '' || m.成績 == null ? '' : Number(m.成績)];
+    });
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, h.length).setValues(rows);
+  } finally { lock.releaseLock(); }
+  return tc_getEntries();
+}
+function tc_deleteEntry(id) {
+  assertOwner_();
+  const lock = LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    const sh = sheet_(SHEET.entries), v = sh.getDataRange().getValues();
+    for (let i = v.length - 1; i >= 1; i--) if (v[i][0] === id) sh.deleteRow(i + 1);
+  } finally { lock.releaseLock(); }
+  return tc_getEntries();
 }
