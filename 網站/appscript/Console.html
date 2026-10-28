@@ -96,7 +96,7 @@ const S = { roster: [], classes: [], scores: {}, groupings: null, tab: 'rec',
   view: { cls: '全部', item: '100公尺跑', date: '' },
   stu: { cls: '全部', basis: 'latest', scope: 'class', sex: '全部', sk: 'no', sd: 1, sel: null },
   assess: {},
-  evt: { preset: 'sprint', nM: 2, nF: 2, rM: 1, rF: 1, nA: 16, rA: 2, item: '', basis: 'best', order: 'alt_f', anchor: 'slow_first', absent: new Set(), pin: new Set(), cur: null, saved: null },
+  evt: { preset: 'sprint', nM: 2, nF: 2, rM: 2, rF: 2, nA: 16, rA: 2, item: '', basis: 'best', order: 'alt_f', anchor: 'slow_first', absent: new Set(), pin: new Set(), cur: null, saved: null },
   grp: { scope: '', item: '100公尺跑', basis: 'latest', method: 'balanced', byMode: 'k', k: 4, size: 5, order: 'slow_first', unmeasured: 'spread', absent: new Set(), cur: null },
   ros: { cls: '' }, grade: { cls: '', sec: 1, lesson: null, rows: [] } };
 
@@ -425,8 +425,8 @@ function drawDetail(T, rows) {
 /* ===== 2c. 運動會選手：100 公尺競賽（每班 2 男 2 女）、400 公尺接力（4 男 4 女）、班級接力（16 人不分性別），依成績挑人，可彈性調整 ===== */
 // 運動會賽制（甲班、乙班互相 PK，各班各自挑人）。全班 80 公尺不用排隊型，這裡不處理。
 const PRESETS = {
-  sprint: { label: '100公尺競賽（每班 2 男 2 女）', nM: 2, nF: 2, rM: 1, rF: 1, legs: false, any: false, defItem: '100公尺跑' },
-  relay: { label: '400公尺接力（每班 4 男 4 女）', nM: 4, nF: 4, rM: 1, rF: 1, legs: true, any: false, dist: 400, defItem: '100公尺跑' },
+  sprint: { label: '100公尺競賽（每班 2 男 2 女）', nM: 2, nF: 2, rM: 2, rF: 2, legs: false, any: false, defItem: '100公尺跑' },
+  relay: { label: '400公尺接力（每班 4 男 4 女）', nM: 4, nF: 4, rM: 2, rF: 2, legs: true, any: false, dist: 400, defItem: '100公尺跑' },
   classRelay: { label: '班級接力（每班 16 人，不分性別）', nA: 16, rA: 2, legs: true, any: true, defItem: '100公尺跑' },
   custom: { label: '自訂賽事', nM: 2, nF: 2, rM: 1, rF: 1, legs: false, any: false, defItem: '100公尺跑' }
 };
