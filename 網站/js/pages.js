@@ -27,7 +27,7 @@ Pages.home = async function () {
 
 /* ---------- 單元共用：分頁列 ---------- */
 function unitTabs(id, cur, extra) {
-  const t = [['', '概覽'], ['map', '課綱對照'], ['s', '八節進程'], ['assess', '評量']];
+  const t = [['', '概覽'], ['map', '課綱對照'], ['s', '六節進程'], ['assess', '評量']];
   return `<div class="tabs">${t.map(([k, n]) => `<a class="${cur === k ? 'on' : ''}" href="#/u/${id}${k ? '/' + k : ''}">${n}</a>`).join('')}${extra || ''}</div>`;
 }
 function unitHead(L) {
@@ -118,7 +118,7 @@ Pages.session = async function (id, no) {
   const dlg = d ? d['場景'].map((sc) => `<details><summary>${esc(sc['名稱'])}</summary><p class="small muted">${esc(sc['說明'])}</p>${sc['對話'].map((l) =>
     `<div class="dlg">${spk(l['說話者'])}<div>${esc(l['英文'])}${l['中文'] ? `<div class="zh">${esc(l['中文'])}</div>` : ''}${l['提示'] ? `<div class="hint">${esc(l['提示'])}</div>` : ''}</div></div>`).join('')}</details>`).join('') : '';
   return {
-    html: `<div class="small"><a href="#/u/${id}/s">← 八節進程</a></div><h1>第 ${s['節']} 節　${esc(s['主題'])}</h1>
+    html: `<div class="small"><a href="#/u/${id}/s">← 六節進程</a></div><h1>第 ${s['節']} 節　${esc(s['主題'])}</h1>
     <div class="row small muted"><span>${esc(s['場地'] || '')}</span><span>·</span><span>器材：${esc((s['器材'] || []).join('、'))}</span></div>
     <div class="card"><b>複習（螺旋）</b><ul style="margin:6px 0 0">${(s['複習'] || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>
     <div class="card"><h3>準備 · 發展 · 總結</h3>${part(w)}${s['活動'].map(part).join('')}
