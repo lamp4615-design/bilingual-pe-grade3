@@ -92,6 +92,27 @@ def validate(L):
         for ref in s.get("教師評量", []):
             if ref not in {a.get("項目") for a in L.get("評量規準", [])}:
                 E(f"第{s['節']}節 教師評量 引用不存在的評量項目 {ref}")
+        # 同儕計分（選用欄位）：滿分＝各項最高分加總、星級門檻遞減、輪替讓每人都被評到
+        pc = s.get("同儕計分")
+        if pc:
+            tag = f"第{s['節']}節 同儕計分"
+            if pc.get("對應評量項目") not in {a.get("項目") for a in L.get("評量規準", [])}:
+                E(f"{tag} 對應的評量項目 {pc.get('對應評量項目')} 不存在")
+            mx = sum(max(it.get("分數", [0])) for it in pc.get("項目", []))
+            if mx != pc.get("滿分"): E(f"{tag} 滿分 {pc.get('滿分')} 與各項最高分加總 {mx} 不符")
+            th = [x.get("門檻") for x in pc.get("星級", [])]
+            if th != sorted(th, reverse=True) or (th and th[-1] != 0): E(f"{tag} 星級門檻須由高到低排列，最後一級為 0")
+            n = pc.get("每組人數", 0); rot = pc.get("輪替", [])
+            if n and rot:
+                scored = {b for r in rot for b in r.get("打者", [])}
+                if scored != set(range(1, n + 1)): E(f"{tag} 輪替沒有讓每位組員都被評到")
+                for r in rot:
+                    if len(r.get("計分員", [])) != pc.get("計分員人數"): E(f"{tag} 第{r.get('輪')}輪計分員人數不符")
+                    if set(r.get("計分員", [])) & set(r.get("打者", [])): E(f"{tag} 第{r.get('輪')}輪計分員不可同時當打者")
+        for a in L.get("評量規準", []):
+            for no, g in (a.get("各節等第") or {}).items():
+                if int(no) not in sess_nos: E(f"評量 {a.get('項目')} 的各節等第寫了不存在的第{no}節")
+                if not all(k in g for k in ("優異", "達成", "努力中")): E(f"評量 {a.get('項目')} 第{no}節 缺三等第")
     # 6 英語：新詞量控制
     lang = L.get("語言目標", {})
     known = {w.lower() for w in prior["字詞"]}

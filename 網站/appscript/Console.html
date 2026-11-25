@@ -198,7 +198,7 @@ async function viewGrade() {
   const sess = L['節次'].find((x) => x['節'] === Gd.sec) || L['節次'][0]; Gd.sec = sess['節'];
   // 評量項目：優先用該節的「教師評量」，沒有就用學生自評＋同儕的項目，再沒有就用全部評量規準
   const ev = sess['學生評量'] || {}; const names = (sess['教師評量'] && sess['教師評量'].length) ? sess['教師評量'] : Array.from(new Set((ev['自評'] || []).concat(ev['同儕'] || []))); const items = names.length ? names : L['評量規準'].map((r) => r['項目']);
-  const rub = {}; L['評量規準'].forEach((r) => { rub[r['項目']] = r['等第'] || {}; });
+  const rub = {}; L['評量規準'].forEach((r) => { rub[r['項目']] = (r['各節等第'] && r['各節等第'][String(Gd.sec)]) || r['等第'] || {}; });
   const unit = L['課程名稱']; Gd.rows = await run('tc_getTeacherGrades', { '單元': unit, '節': Gd.sec, '班級': Gd.cls });
   const cur = {}, note = {}; Gd.rows.forEach((r) => { if (r['項目'] === '備註') note[r['座號']] = r['備註']; else cur[r['座號'] + '|' + r['項目']] = Number(r['等第']); });
   $('#main').innerHTML = '<div class="card"><div class="row"><div class="f"><label>單元</label><select id="gu">' + us.map((u) => '<option value="' + esc(u.id) + '"' + (u.id === Gd.uid ? ' selected' : '') + '>' + esc(u.title) + '</option>').join('') + '</select></div>' +
