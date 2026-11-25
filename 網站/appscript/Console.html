@@ -70,7 +70,7 @@ th.sortable { cursor:pointer; user-select:none; } th.sortable:hover { color:var(
 <body>
 <header><b>教師後台</b><span>雙語體育共學站 · 三年級甲班／乙班</span></header>
 <nav id="tabs">
-  <button data-t="rec">登記成績</button><button data-t="grade">課堂評分</button><button data-t="view">成績總覽</button><button data-t="stu">個人表現</button><button data-t="evt">運動會選手</button><button data-t="grp">分組</button><button data-t="ros">名單</button>
+  <button data-t="rec">登記成績</button><button data-t="grade">課堂評分</button><button data-t="peer">同儕計分</button><button data-t="view">成績總覽</button><button data-t="stu">個人表現</button><button data-t="evt">運動會選手</button><button data-t="grp">分組</button><button data-t="ros">名單</button>
 </nav>
 <main id="main"><p class="muted">載入中…</p></main>
 <div id="toast"></div>
@@ -98,7 +98,8 @@ const S = { roster: [], classes: [], scores: {}, groupings: null, tab: 'rec',
   assess: {},
   evt: { preset: 'sprint', nM: 2, nF: 2, rM: 2, rF: 2, nA: 16, rA: 2, item: '', basis: 'best', order: 'alt_f', anchor: 'slow_first', absent: new Set(), pin: new Set(), cur: null, saved: null },
   grp: { scope: '', item: '100公尺跑', basis: 'latest', method: 'balanced', byMode: 'k', k: 4, size: 5, order: 'slow_first', unmeasured: 'spread', absent: new Set(), cur: null },
-  ros: { cls: '' }, grade: { cls: '', sec: 1, lesson: null, rows: [] } };
+  ros: { cls: '' }, grade: { cls: '', sec: 1, lesson: null, rows: [] },
+  peer: { uid: '', sec: null, cls: '', grp: 'A', mode: 'item', memb: {}, rows: [] } };
 
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
@@ -132,7 +133,7 @@ function bestMap(rows, it) {
 function go(t) {
   S.tab = t;
   $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
-  ({ rec: viewRec, grade: viewGrade, view: viewScores, stu: viewStudents, evt: viewEvents, grp: viewGroups, ros: viewRoster })[t]().catch((e) => { $('#main').innerHTML = '<div class="notice">讀取失敗：' + esc(e.message) + '</div>'; });
+  ({ rec: viewRec, grade: viewGrade, peer: viewPeer, view: viewScores, stu: viewStudents, evt: viewEvents, grp: viewGroups, ros: viewRoster })[t]().catch((e) => { $('#main').innerHTML = '<div class="notice">讀取失敗：' + esc(e.message) + '</div>'; });
 }
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) go(b.dataset.t); };
 
@@ -219,6 +220,127 @@ async function viewGrade() {
     if (!records.length) return toast('沒有變動');
     $('#gsv').disabled = true;
     try { await run('tc_saveTeacherGrades', { '單元': unit, '節': Gd.sec, '班級': Gd.cls, records }); toast('已儲存 ' + records.length + ' 項變動'); viewGrade(); } catch (e) { toast('失敗：' + e.message); $('#gsv').disabled = false; }
+  };
+}
+
+/* ===== 同儕計分：組員設定、紙本計分表課後輸入、平均／星級／等第／小組得分 =====
+   規則全部讀教案各節的「同儕計分」：項目與分數、滿分、輪替（組內編號）、星級門檻與稱號、星級對應等第、查核差距；小組得分讀「小組得分」。 */
+const GL = (i) => String.fromCharCode(65 + i);
+const GRADE_NUM = { '優異': 3, '達成': 2, '努力中': 1 };
+async function peerUnits() {
+  const out = []; for (const u of await unitList()) { const L = await lessonData(u.id); if (L['節次'].some((s) => s['同儕計分'])) out.push({ u, L }); } return out;
+}
+// 由計分紀錄算出每位打者的結果、每組的小組得分與需要查核的紀錄
+function peerResults(rows, pc, gr) {
+  const by = {}, turns = {}, flags = [];
+  rows.forEach((r) => { (by[r['打者座號']] = by[r['打者座號']] || { grp: r['組別'], v: [] }).v.push(r['得分']); const k = r['組別'] + '|' + r['輪'] + '|' + r['打者座號']; (turns[k] = turns[k] || []).push(r); });
+  const stars = pc['星級'].slice().sort((a, b) => b['門檻'] - a['門檻']);
+  const res = {};
+  Object.keys(by).forEach((no) => { const v = by[no].v, avg = mean(v), st = stars.find((x) => avg >= x['門檻'] - 1e-9) || stars[stars.length - 1];
+    res[no] = { grp: by[no].grp, n: v.length, avg, star: st['星'], title: st['稱號'], grade: pc['星級對應等第'][String(st['星'])] }; });
+  const gap = pc['查核差距'] || 2, groups = {};
+  Object.keys(turns).forEach((k) => { const list = turns[k], [g, rd, no] = k.split('|'), sc = mean(list.map((x) => x['得分']));
+    const G = (groups[g] = groups[g] || { sum: 0, n: 0 }); G.sum += sc; G.n += 1;
+    if (list.length > 1) { const vs = list.map((x) => x['得分']); if (Math.max(...vs) - Math.min(...vs) >= gap) flags.push(g + ' 組第 ' + rd + ' 輪：' + no + ' 號的兩位計分員分數差 ' + (Math.max(...vs) - Math.min(...vs)) + ' 分（' + list.map((x) => x['計分員座號'] + ' 號給 ' + x['得分']).join('、') + '）'); } });
+  if (pc['計分員人數'] === 1) {           // 每次只有 1 位計分員：比較同一位打者的各計分員分數，與其他人平均差太多的列出
+    rows.forEach((r) => { const others = rows.filter((x) => x['打者座號'] === r['打者座號'] && x !== r).map((x) => x['得分']); if (others.length >= 2 && Math.abs(r['得分'] - mean(others)) >= gap) flags.push(r['組別'] + ' 組第 ' + r['輪'] + ' 輪：' + r['計分員座號'] + ' 號給 ' + r['打者座號'] + ' 號 ' + r['得分'] + ' 分，其他計分員平均 ' + mean(others).toFixed(1) + ' 分'); });
+  }
+  const th = (gr && gr['等第門檻'] ? gr['等第門檻'] : []).slice().sort((a, b) => b['百分比'] - a['百分比']);
+  Object.keys(groups).forEach((g) => { const G = groups[g]; G.max = G.n * pc['滿分']; G.pct = G.max ? G.sum / G.max * 100 : 0; const t = th.find((x) => G.pct >= x['百分比'] - 1e-9); G.grade = t ? t['等第'] : ''; });
+  return { res, groups, flags };
+}
+async function viewPeer() {
+  const P = S.peer; P.cls = P.cls || S.classes[0]; let list;
+  try { list = await peerUnits(); } catch (e) { $('#main').innerHTML = '<div class="notice">讀不到教案資料（' + esc(e.message) + '）。請確認網站可以開啟。</div>'; return; }
+  if (!list.length) { $('#main').innerHTML = '<div class="notice">目前沒有單元設定「同儕計分」。</div>'; return; }
+  if (!P.uid || !list.some((x) => x.u.id === P.uid)) { P.uid = list[0].u.id; P.sec = null; }
+  const L = list.find((x) => x.u.id === P.uid).L, unit = L['課程名稱'];
+  const secs = L['節次'].filter((s) => s['同儕計分']); const sess = secs.find((s) => s['節'] === P.sec) || secs[0]; P.sec = sess['節'];
+  const pc = sess['同儕計分'], per = pc['每組人數'], roster = clsRoster(P.cls);
+  const labels = Array.from({ length: Math.max(1, Math.ceil(roster.length / per)) }, (_, i) => GL(i)); if (!labels.includes(P.grp)) P.grp = labels[0];
+  const [ug, rows] = await Promise.all([run('tc_getUnitGroups', { '單元': unit, '班級': P.cls }), run('tc_getPeerScores', { '單元': unit, '節': P.sec, '班級': P.cls })]);
+  P.memb = {}; ug.forEach((r) => { (P.memb[r['組別']] = P.memb[r['組別']] || {})[r['組內編號']] = r['座號']; }); P.rows = rows;
+  const seatOf = (g, k) => (P.memb[g] || {})[k];
+  const nick = (no) => { const r = roster.find((x) => Number(x['座號']) === Number(no)); return no + (r && r['暱稱'] ? ' ' + esc(r['暱稱']) : ''); };
+  const R = peerResults(rows, pc, sess['小組得分']);
+  // 1. 選擇
+  let h = '<div class="card"><div class="row"><div class="f"><label>單元</label><select id="pu">' + list.map((x) => '<option value="' + esc(x.u.id) + '"' + (x.u.id === P.uid ? ' selected' : '') + '>' + esc(x.u.title) + '</option>').join('') + '</select></div>' +
+    '<div class="f"><label>節次</label><select id="ps">' + secs.map((s) => '<option value="' + s['節'] + '"' + (s['節'] === P.sec ? ' selected' : '') + '>第 ' + s['節'] + ' 節　' + esc(s['主題']) + '</option>').join('') + '</select></div>' +
+    '<div class="f"><label>班級</label><select id="pc">' + optList(S.classes, P.cls) + '</select></div></div>' +
+    '<p class="small muted">' + esc(pc['方式']) + '。每次最高 ' + pc['滿分'] + ' 分；星級：' + pc['星級'].map((x) => '★'.repeat(x['星']) + ' ' + esc(x['稱號']) + (x['門檻'] ? '（平均 ≥ ' + x['門檻'] + '）' : '')).join('、') + '。</p></div>';
+  // 2. 組員設定
+  const opts = (cur) => '<option value="">—</option>' + roster.map((r) => '<option value="' + r['座號'] + '"' + (Number(cur) === Number(r['座號']) ? ' selected' : '') + '>' + nick(r['座號']) + '</option>').join('');
+  const assigned = labels.some((g) => Object.keys(P.memb[g] || {}).length);
+  h += '<details class="card"' + (assigned ? '' : ' open') + '><summary><b>組員設定（' + esc(unit) + '・' + esc(P.cls) + '）</b>' + (assigned ? '' : ' <span class="tag warn">尚未設定</span>') + '</summary>' +
+    '<p class="small muted">計分表用「組內編號 1–' + per + '」。這裡設定每組的 1–' + per + ' 號是哪位同學；整個單元共用，換節次不必重設。可先到「分組」分頁產生分組，再依結果填入。</p>' +
+    labels.map((g) => '<div class="row" style="margin:4px 0"><b style="width:3em">' + g + ' 組</b>' + Array.from({ length: per }, (_, i) => '<label class="small">' + (i + 1) + ' 號<select class="pm" data-g="' + g + '" data-k="' + (i + 1) + '">' + opts(seatOf(g, i + 1)) + '</select></label>').join('') + '</div>').join('') +
+    '<div class="row" style="margin-top:8px"><button class="btn sm ghost" id="pauto">依座號順序填入</button><button class="btn sm" id="pmsv">儲存組員</button></div></details>';
+  // 3. 輸入計分表
+  const mine = rows.filter((r) => r['組別'] === P.grp), old = {}; mine.forEach((r) => { old[r['輪'] + '|' + r['計分員座號'] + '|' + r['打者座號']] = r; });
+  const ready = Object.keys(P.memb[P.grp] || {}).length > 0;
+  h += '<div class="card"><h3>輸入計分表</h3><div class="row"><div class="f"><label>組別</label><select id="pg">' + optList(labels, P.grp) + '</select></div>' +
+    '<div class="f"><label>輸入方式</label><select id="pmode"><option value="item"' + (P.mode === 'item' ? ' selected' : '') + '>逐項輸入（和計分表欄位相同）</option><option value="tot"' + (P.mode === 'tot' ? ' selected' : '') + '>只輸入本次得分</option></select></div></div>';
+  if (!ready) h += '<div class="notice">請先在上方「組員設定」指定 ' + P.grp + ' 組的組內編號。</div>';
+  else {
+    h += '<p class="small muted">空白＝這次沒有打（缺席或時間不夠），不會計入。' + pc['項目'].map((it) => '<b>' + esc(it['名稱']) + '</b>：' + esc(it['說明'])).join('；') + '</p>';
+    h += pc['輪替'].map((rd) => { const scs = rd['計分員'].map((k) => seatOf(P.grp, k)).filter(Boolean);
+      return '<div class="card" style="margin:8px 0"><b>第 ' + rd['輪'] + ' 輪</b>　<span class="small">計分員：' + rd['計分員'].map((k) => k + ' 號' + (seatOf(P.grp, k) ? '（座號 ' + nick(seatOf(P.grp, k)) + '）' : '（未設定）')).join('、') + '</span>' +
+        '<div class="scroll"><table><thead><tr><th>打者</th><th>計分員</th>' + (P.mode === 'item' ? pc['項目'].map((it) => '<th>' + esc(it['名稱']) + '</th>').join('') : '') + '<th>本次得分</th></tr></thead><tbody>' +
+        rd['打者'].map((bk) => { const b = seatOf(P.grp, bk); if (!b) return '<tr><td>' + bk + ' 號</td><td colspan="9" class="muted small">組內編號未設定</td></tr>';
+          return scs.map((s) => { const o = old[rd['輪'] + '|' + s + '|' + b]; let items = []; try { items = o && o['項目分數'] ? JSON.parse(o['項目分數']) : []; } catch (e) { items = []; }
+            return '<tr class="pr" data-r="' + rd['輪'] + '" data-s="' + s + '" data-b="' + b + '"><td>' + bk + ' 號（' + nick(b) + '）</td><td>' + nick(s) + '</td>' +
+              (P.mode === 'item' ? pc['項目'].map((it, i) => '<td><select class="pi" data-i="' + i + '"><option value="">—</option>' + it['分數'].map((v) => '<option' + (o && items[i] === v ? ' selected' : '') + '>' + v + '</option>').join('') + '</select></td>').join('') : '') +
+              '<td>' + (P.mode === 'item' ? '<b class="pt">' + (o ? o['得分'] : '—') + '</b>' : '<input class="pt" type="number" min="0" max="' + pc['滿分'] + '" step="1" style="width:5em" value="' + (o ? o['得分'] : '') + '">') + '</td></tr>'; }).join(''); }).join('') +
+        '</tbody></table></div></div>'; }).join('');
+    h += '<div class="row"><button class="btn" id="psv">儲存 ' + P.grp + ' 組計分</button><span class="small muted">重存會覆蓋這一組這一節的紀錄。</span></div>';
+  }
+  h += '</div>';
+  // 4. 結果
+  const nos = Object.keys(R.res).map(Number).sort((a, b) => a - b);
+  h += '<div class="card"><h3>結果（第 ' + P.sec + ' 節・' + esc(P.cls) + '）</h3>' + (nos.length ? '' : '<p class="muted">還沒有計分紀錄。</p>') +
+    labels.filter((g) => nos.some((n) => R.res[n].grp === g)).map((g) => { const G = R.groups[g];
+      return '<h4>' + g + ' 組　<span class="small">小組得分 ' + (G ? G.sum.toFixed(1) + ' / ' + G.max + '（' + G.pct.toFixed(0) + '%）→ <b>' + esc(G.grade) + '</b>　已記錄 ' + G.n + ' 次打擊' : '—') + '</span></h4>' +
+        '<div class="scroll"><table><thead><tr><th>座號</th><th>筆數</th><th>平均</th><th>星級</th><th>稱號</th><th>等第（' + esc(pc['對應評量項目']) + '）</th></tr></thead><tbody>' +
+        nos.filter((n) => R.res[n].grp === g).map((n) => { const x = R.res[n]; return '<tr><td>' + nick(n) + '</td><td>' + x.n + '</td><td>' + x.avg.toFixed(2) + '</td><td>' + '★'.repeat(x.star) + '☆'.repeat(3 - x.star) + '</td><td>' + esc(x.title) + '</td><td><b>' + esc(x.grade) + '</b></td></tr>'; }).join('') + '</tbody></table></div>'; }).join('') +
+    (R.flags.length ? '<div class="notice"><b>需要查核（差距 ≥ ' + (pc['查核差距'] || 2) + ' 分）</b><ul>' + R.flags.map((f) => '<li>' + esc(f) + '</li>').join('') + '</ul></div>' : (nos.length ? '<p class="small muted">沒有需要查核的紀錄。</p>' : '')) +
+    (nos.length ? '<div class="row"><button class="btn sm" id="pto">把等第帶入課堂評分（' + esc(pc['對應評量項目']) + '）</button><button class="btn sm ghost" id="pcsv">下載 CSV</button></div>' : '') + '</div>';
+  $('#main').innerHTML = h;
+  // 事件
+  $('#pu').onchange = (e) => { P.uid = e.target.value; P.sec = null; viewPeer(); };
+  $('#ps').onchange = (e) => { P.sec = Number(e.target.value); viewPeer(); };
+  $('#pc').onchange = (e) => { P.cls = e.target.value; viewPeer(); };
+  $('#pg').onchange = (e) => { P.grp = e.target.value; viewPeer(); };
+  $('#pmode').onchange = (e) => { P.mode = e.target.value; viewPeer(); };
+  $('#pauto').onclick = () => { const seats = roster.map((r) => r['座號']); $$('.pm').forEach((sel) => { const gi = sel.dataset.g.charCodeAt(0) - 65, k = Number(sel.dataset.k); sel.value = seats[gi * per + k - 1] || ''; }); toast('已依座號順序填入，確認後按「儲存組員」'); };
+  $('#pmsv').onclick = async () => {
+    const members = [], seen = {}; let dup = '';
+    $$('.pm').forEach((sel) => { if (!sel.value) return; if (seen[sel.value]) dup = sel.value; seen[sel.value] = true; members.push({ 組別: sel.dataset.g, 組內編號: Number(sel.dataset.k), 座號: Number(sel.value) }); });
+    if (dup) return toast('座號 ' + dup + ' 被分到兩個位置');
+    try { await run('tc_saveUnitGroups', { '單元': unit, '班級': P.cls, members }); toast('已儲存組員'); viewPeer(); } catch (e) { toast('失敗：' + e.message); }
+  };
+  $$('.pi').forEach((sel) => { sel.onchange = () => { const tr = sel.closest('tr'), vs = $$('.pi', tr).map((x) => x.value); $('.pt', tr).textContent = vs.every((v) => v === '') ? '—' : vs.reduce((a, v) => a + (v === '' ? 0 : Number(v)), 0); }; });
+  if ($('#psv')) $('#psv').onclick = async () => {
+    const out = []; let bad = '';
+    $$('tr.pr').forEach((tr) => {
+      const base = { 輪: Number(tr.dataset.r), 計分員座號: Number(tr.dataset.s), 打者座號: Number(tr.dataset.b) };
+      if (P.mode === 'item') { const vs = $$('.pi', tr).map((x) => x.value); if (vs.every((v) => v === '')) return; if (vs.some((v) => v === '')) { bad = '第 ' + base.輪 + ' 輪 ' + base.打者座號 + ' 號有項目沒填'; return; }
+        out.push(Object.assign(base, { 項目分數: JSON.stringify(vs.map(Number)), 得分: vs.reduce((a, v) => a + Number(v), 0) })); }
+      else { const v = $('.pt', tr).value.trim(); if (v === '') return; const n = Number(v); if (!(n >= 0 && n <= pc['滿分'])) { bad = '第 ' + base.輪 + ' 輪 ' + base.打者座號 + ' 號的得分要在 0–' + pc['滿分']; return; } out.push(Object.assign(base, { 項目分數: '', 得分: n })); }
+    });
+    if (bad) return toast(bad);
+    $('#psv').disabled = true;
+    try { await run('tc_savePeerScores', { '單元': unit, '節': P.sec, '班級': P.cls, '組別': P.grp, rows: out }); toast('已儲存 ' + P.grp + ' 組 ' + out.length + ' 筆'); viewPeer(); } catch (e) { toast('失敗：' + e.message); $('#psv').disabled = false; }
+  };
+  if ($('#pto')) $('#pto').onclick = async () => {
+    if (!confirm('把每位同學的等第寫入「課堂評分」的「' + pc['對應評量項目'] + '」？已有的這一項會被覆蓋。')) return;
+    const records = nos.map((n) => ({ 座號: n, 項目: pc['對應評量項目'], 等第: GRADE_NUM[R.res[n].grade] || 0, 備註: '' }));
+    try { await run('tc_saveTeacherGrades', { '單元': unit, '節': P.sec, '班級': P.cls, records }); toast('已帶入 ' + records.length + ' 位同學的等第'); } catch (e) { toast('失敗：' + e.message); }
+  };
+  if ($('#pcsv')) $('#pcsv').onclick = () => {
+    const head = ['班級', '節', '組別', '座號', '筆數', '平均', '星級', '稱號', '等第', '小組得分', '小組滿分', '小組百分比', '小組等第'];
+    const body = nos.map((n) => { const x = R.res[n], G = R.groups[x.grp] || {}; return [P.cls, P.sec, x.grp, n, x.n, x.avg.toFixed(2), x.star, x.title, x.grade, G.sum == null ? '' : G.sum.toFixed(1), G.max || '', G.pct == null ? '' : G.pct.toFixed(0), G.grade || '']; });
+    const t = '﻿' + [head].concat(body).map((a) => a.map((c) => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\r\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([t], { type: 'text/csv' })); a.download = '同儕計分_' + unit + '_第' + P.sec + '節_' + P.cls + '.csv'; a.click();
   };
 }
 

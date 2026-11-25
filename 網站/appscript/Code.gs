@@ -11,7 +11,8 @@
 
 const SHEET = {
   roster: '學生名單', assess: '學生評量', weak: '不熟悉清單',
-  taught: '教學進度', reflect: '教學省思', review: '複習排程', scores: '體育成績', groups: '分組紀錄', tgrade: '教師評量', entries: '賽事選手'
+  taught: '教學進度', reflect: '教學省思', review: '複習排程', scores: '體育成績', groups: '分組紀錄', tgrade: '教師評量', entries: '賽事選手',
+  ugroups: '單元分組', peer: '同儕計分'
 };
 const CLASSES = ['甲班', '乙班'];
 const HEADERS = {
@@ -24,7 +25,9 @@ const HEADERS = {
   '體育成績': ['日期', '班級', '項目', '座號', '次別', '成績', '單位', '備註', '登錄時間'],
   '教師評量': ['時間', '單元', '節', '班級', '座號', '項目', '等第', '備註'],
   '分組紀錄': ['分組ID', '建立時間', '名稱', '日期', '策略', '參數', '備註', '組別', '班級', '座號', '棒次', '成績'],
-  '賽事選手': ['名單ID', '建立時間', '名稱', '賽事', '參數', '備註', '班級', '座號', '性別', '角色', '棒次', '成績']
+  '賽事選手': ['名單ID', '建立時間', '名稱', '賽事', '參數', '備註', '班級', '座號', '性別', '角色', '棒次', '成績'],
+  '單元分組': ['單元', '班級', '組別', '組內編號', '座號', '更新時間'],
+  '同儕計分': ['時間', '單元', '節', '班級', '組別', '輪', '計分員座號', '打者座號', '項目分數', '得分']
 };
 
 /** 第一次使用：在 Apps Script 編輯器執行一次 setup()，會建立所有工作表與表頭。 */
@@ -354,6 +357,74 @@ function tc_saveTeacherGrades(p) {
     });
   } finally { lock.releaseLock(); }
   return tc_getTeacherGrades({ 單元: p.單元, 節: p.節, 班級: p.班級 });
+}
+
+/* ---------- 單元分組與同儕計分（例如樂樂棒球：3 組 × 6 人，紙本計分表課後輸入） ----------
+ * 單元分組：每個單元、每班各自一套，組別 A/B/C…，組內編號 1–6 對應座號（計分表與輪替表用組內編號）。
+ * 同儕計分：一位計分員對一位打者的一次評分一列；重存同一單元／節／班級／組別＝整組覆蓋。 */
+function ensure_(name) {                      // 新增的工作表不必重跑 setup，第一次用到時自動建立
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(name);
+  if (!sh) { sh = ss.insertSheet(name); sh.getRange(1, 1, 1, HEADERS[name].length).setValues([HEADERS[name]]).setFontWeight('bold'); sh.setFrozenRows(1); }
+  return sh;
+}
+function replaceRows_(name, drop, add) {      // 刪掉 drop(列物件) 為真的列，再加上 add（陣列的陣列）
+  const sh = ensure_(name), h = HEADERS[name], v = sh.getDataRange().getValues(); v.shift();
+  const keep = v.filter(function (r) { const o = {}; h.forEach(function (k, i) { o[k] = r[i]; }); return !drop(o); });
+  const all = keep.concat(add);
+  sh.clearContents();
+  sh.getRange(1, 1, 1, h.length).setValues([h]).setFontWeight('bold');
+  if (all.length) sh.getRange(2, 1, all.length, h.length).setValues(all);
+}
+function tc_getUnitGroups(p) {
+  assertOwner_(); ensure_(SHEET.ugroups);
+  return rows_(SHEET.ugroups).filter(function (r) { return r.單元 === p.單元 && r.班級 === p.班級; })
+    .map(function (r) { return { 組別: String(r.組別), 組內編號: Number(r.組內編號), 座號: Number(r.座號) }; });
+}
+function tc_saveUnitGroups(p) {
+  assertOwner_();
+  if (!p.單元) throw new Error('缺少單元');
+  if (CLASSES.indexOf(p.班級) < 0) throw new Error('班級必須是 ' + CLASSES.join(' 或 '));
+  const seen = {}, add = [];
+  (p.members || []).forEach(function (m) {
+    const no = Number(m.座號), k = Number(m.組內編號);
+    if (!(no > 0) || !(k > 0)) throw new Error('座號與組內編號必須是正整數');
+    if (!/^[A-Z]$/.test(String(m.組別))) throw new Error('組別必須是 A、B、C…');
+    if (seen[no]) throw new Error('座號 ' + no + ' 被分到兩個位置');
+    seen[no] = true;
+    add.push([p.單元, p.班級, String(m.組別), k, no, now_()]);
+  });
+  const lock = LockService.getScriptLock(); lock.waitLock(15000);
+  try { replaceRows_(SHEET.ugroups, function (o) { return o.單元 === p.單元 && o.班級 === p.班級; }, add); }
+  finally { lock.releaseLock(); }
+  return tc_getUnitGroups(p);
+}
+function tc_getPeerScores(p) {
+  assertOwner_(); ensure_(SHEET.peer);
+  return rows_(SHEET.peer).filter(function (r) { return r.單元 === p.單元 && Number(r.節) === Number(p.節) && r.班級 === p.班級; })
+    .map(function (r) {
+      return { 時間: String(plain_(r.時間)), 組別: String(r.組別), 輪: Number(r.輪), 計分員座號: Number(r.計分員座號), 打者座號: Number(r.打者座號),
+        項目分數: String(r.項目分數 || ''), 得分: Number(r.得分) };
+    });
+}
+function tc_savePeerScores(p) {
+  assertOwner_();
+  if (!p.單元 || !(Number(p.節) > 0)) throw new Error('缺少單元或節次');
+  if (CLASSES.indexOf(p.班級) < 0) throw new Error('班級必須是 ' + CLASSES.join(' 或 '));
+  if (!/^[A-Z]$/.test(String(p.組別))) throw new Error('組別必須是 A、B、C…');
+  const t = now_();
+  const add = (p.rows || []).map(function (r) {
+    const g = Number(r.得分);
+    if (!(g >= 0 && g <= 50)) throw new Error('得分必須是 0–50 的數字');
+    if (!(Number(r.計分員座號) > 0) || !(Number(r.打者座號) > 0) || !(Number(r.輪) > 0)) throw new Error('輪、計分員座號、打者座號必須是正整數');
+    if (Number(r.計分員座號) === Number(r.打者座號)) throw new Error('計分員不能評自己（座號 ' + r.打者座號 + '）');
+    return [t, p.單元, Number(p.節), p.班級, String(p.組別), Number(r.輪), Number(r.計分員座號), Number(r.打者座號), String(r.項目分數 || '').slice(0, 100), g];
+  });
+  const lock = LockService.getScriptLock(); lock.waitLock(15000);
+  try {
+    replaceRows_(SHEET.peer, function (o) { return o.單元 === p.單元 && Number(o.節) === Number(p.節) && o.班級 === p.班級 && String(o.組別) === String(p.組別); }, add);
+  } finally { lock.releaseLock(); }
+  return tc_getPeerScores(p);
 }
 
 /* ---------- 運動會選手名單（400 公尺接力、80 公尺…）：一次存成多列，用「名單ID」串起來，可隨時叫出來調整 ---------- */
