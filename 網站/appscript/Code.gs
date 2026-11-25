@@ -89,7 +89,7 @@ function doPost(e) {
     const req = JSON.parse(e.postData.contents);
     const p = req.payload || {};
     const studentOK = !!req.classCode && req.classCode === PropertiesService.getScriptProperties().getProperty('CLASS_CODE');
-    const studentActions = { roster: rosterForStudents_, submitAssessment: submitAssessment_ };
+    const studentActions = { roster: rosterForStudents_, unitGroups: unitGroupsForStudents_, submitAssessment: submitAssessment_ };
     if (req.action === 'ping') return out({ ok: true, data: { role: studentOK ? 'student' : 'none' } });
     if (studentActions[req.action] && studentOK) return out({ ok: true, data: studentActions[req.action](p) });
     return out({ ok: false, error: '沒有權限或未知的動作：' + req.action });
@@ -117,6 +117,17 @@ function today_() { return Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy
 function roster_() { return rows_(SHEET.roster).map(function (r) { r['班級'] = r['班級'] || CLASSES[0]; r['性別'] = r['性別'] || ''; return r; }); }
 /** 學生端只拿得到座號、隊、暱稱、班級；性別只給老師後台（選運動會選手用）。 */
 function rosterForStudents_() { return roster_().map(function (r) { return { '座號': r['座號'], '隊': r['隊'], '暱稱': r['暱稱'], '班級': r['班級'] }; }); }
+/** 這個單元在後台「同儕計分 → 組員設定」設好的分組（A/B/C…）。iPad 自評選組用；沒設定時回空陣列，iPad 改用名單的「隊」。 */
+function unitGroupsForStudents_(p) {
+  if (!sheet_(SHEET.ugroups) || !p.單元) return [];
+  return rows_(SHEET.ugroups).filter(function (r) { return r.單元 === p.單元; })
+    .map(function (r) { return { '班級': r.班級, '組別': String(r.組別), '組內編號': Number(r.組內編號), '座號': Number(r.座號) }; });
+}
+/** 評量者隊：名單的隊（數字）或單元分組的組別（A/B/C…）。 */
+function teamOf_(v) {
+  const t = String(v == null ? '' : v).trim();
+  return /^[A-Z]$/.test(t) ? t : (Number(t) > 0 ? Number(t) : '');
+}
 function sex_(v) {
   const t = String(v == null ? '' : v).trim().toLowerCase();
   if (!t) return '';
@@ -130,7 +141,7 @@ function submitAssessment_(p) {
   if ([1, 2, 3].indexOf(grade) < 0) throw new Error('等第必須是 1、2、3');
   if (['自評', '同儕'].indexOf(p.類型) < 0) throw new Error('類型必須是 自評 或 同儕');
   append_(SHEET.assess, {
-    班級: p.班級 || CLASSES[0], 時間: now_(), 單元: p.單元, 節: Number(p.節), 類型: p.類型, 評量者座號: Number(p.評量者座號), 評量者隊: Number(p.評量者隊),
+    班級: p.班級 || CLASSES[0], 時間: now_(), 單元: p.單元, 節: Number(p.節), 類型: p.類型, 評量者座號: Number(p.評量者座號), 評量者隊: teamOf_(p.評量者隊),
     被評者座號: p.被評者座號 ? Number(p.被評者座號) : '', 項目: p.項目, 等第: grade, 鼓勵語: String(p.鼓勵語 || '').slice(0, 60)
   });
   return { saved: true };
