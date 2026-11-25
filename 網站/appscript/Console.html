@@ -70,7 +70,7 @@ th.sortable { cursor:pointer; user-select:none; } th.sortable:hover { color:var(
 <body>
 <header><b>教師後台</b><span>雙語體育共學站 · 三年級甲班／乙班</span></header>
 <nav id="tabs">
-  <button data-t="rec">登記成績</button><button data-t="grade">課堂評分</button><button data-t="peer">同儕計分</button><button data-t="view">成績總覽</button><button data-t="stu">個人表現</button><button data-t="evt">運動會選手</button><button data-t="grp">分組</button><button data-t="ros">名單</button>
+  <button data-t="rec">登記成績</button><button data-t="grade">課堂評分</button><button data-t="peer">同儕計分</button><button data-t="jrn">教學紀錄</button><button data-t="view">成績總覽</button><button data-t="stu">個人表現</button><button data-t="evt">運動會選手</button><button data-t="grp">分組</button><button data-t="ros">名單</button>
 </nav>
 <main id="main"><p class="muted">載入中…</p></main>
 <div id="toast"></div>
@@ -99,7 +99,8 @@ const S = { roster: [], classes: [], scores: {}, groupings: null, tab: 'rec',
   evt: { preset: 'sprint', nM: 2, nF: 2, rM: 2, rF: 2, nA: 16, rA: 2, item: '', basis: 'best', order: 'alt_f', anchor: 'slow_first', absent: new Set(), pin: new Set(), cur: null, saved: null },
   grp: { scope: '', item: '100公尺跑', basis: 'latest', method: 'balanced', byMode: 'k', k: 4, size: 5, order: 'slow_first', unmeasured: 'spread', absent: new Set(), cur: null },
   ros: { cls: '' }, grade: { cls: '', sec: 1, lesson: null, rows: [] },
-  peer: { uid: '', sec: null, cls: '', grp: 'A', mode: 'item', memb: {}, rows: [] } };
+  peer: { uid: '', sec: null, cls: '', grp: 'A', mode: 'item', memb: {}, rows: [] },
+  jrn: { uid: '', sec: null, cls: '', date: null, mode: 'edit', cache: {} } };
 
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
@@ -133,7 +134,7 @@ function bestMap(rows, it) {
 function go(t) {
   S.tab = t;
   $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
-  ({ rec: viewRec, grade: viewGrade, peer: viewPeer, view: viewScores, stu: viewStudents, evt: viewEvents, grp: viewGroups, ros: viewRoster })[t]().catch((e) => { $('#main').innerHTML = '<div class="notice">讀取失敗：' + esc(e.message) + '</div>'; });
+  ({ rec: viewRec, grade: viewGrade, peer: viewPeer, jrn: viewJournal, view: viewScores, stu: viewStudents, evt: viewEvents, grp: viewGroups, ros: viewRoster })[t]().catch((e) => { $('#main').innerHTML = '<div class="notice">讀取失敗：' + esc(e.message) + '</div>'; });
 }
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) go(b.dataset.t); };
 
@@ -220,6 +221,151 @@ async function viewGrade() {
     if (!records.length) return toast('沒有變動');
     $('#gsv').disabled = true;
     try { await run('tc_saveTeacherGrades', { '單元': unit, '節': Gd.sec, '班級': Gd.cls, records }); toast('已儲存 ' + records.length + ' 項變動'); viewGrade(); } catch (e) { toast('失敗：' + e.message); $('#gsv').disabled = false; }
+  };
+}
+
+/* ===== 教學紀錄：每節課後的觀察日誌與省思（行動研究：教師＝班級經營／教學內容／教學技巧，學生＝參與度／回饋／專注度） ===== */
+const JDIMS = [
+  { k: '班級經營', who: '教師', hint: '集合與分組輪替、器材與安全、等待時間' },
+  { k: '教學內容', who: '教師', hint: '份量與難度、時間分配（暖身／Part 1／Part 2／總結）' },
+  { k: '教學技巧', who: '教師', hint: '示範、TPR 口令、提問、鷹架與中英切換' },
+  { k: '參與度', who: '學生', hint: '投入的人數、輪到時是否準備好' },
+  { k: '回饋', who: '學生', hint: '能否回應口令、說出英語、給同伴回饋' },
+  { k: '專注度', who: '學生', hint: '聽指令、等待區守規則、分心情形' }
+];
+const JLV = { 教師: { 3: '順利', 2: '尚可', 1: '需調整' }, 學生: { 3: '高', 2: '中', 1: '低' } };
+const EN_RATIO = ['', '約 25% 以下', '約 25–50%', '約 50–75%', '約 75% 以上'];
+const PROG = ['已完成', '部分完成', '延後'];
+const SAID = { '': '未觀察', '✓': '多數會說', '△': '少數會說' };
+// 本節學生該說的英語：暖身、各活動、總結的「學生回應」
+const sessPhrases = (s) => Array.from(new Set([s['暖身'], ...(s['活動'] || []), s['總結']].filter((x) => x && Array.isArray(x['學生回應'])).flatMap((x) => x['學生回應'])));
+// 學生說出：「Swing!✓｜Drop!△｜其他：Nice try!」；個別觀察：一行一位「3：不敢開口」
+const parseSaid = (t) => { const m = {}; let other = ''; String(t || '').split('｜').forEach((x) => { x = x.trim(); if (x.startsWith('其他：')) other = x.slice(3); else if (/[✓△]$/.test(x)) m[x.slice(0, -1)] = x.slice(-1); }); return { m, other }; };
+const parseObs = (t) => String(t || '').split('\n').map((l) => l.match(/^(\d+)：(.*)$/)).filter(Boolean).map((x) => ({ no: Number(x[1]), txt: x[2] }));
+const jlabel = (d, v) => (v ? JLV[d.who][v] : '—');
+async function journalsOf(unit, cls, force) {
+  const J = S.jrn, key = unit + '|' + cls;
+  if (force || !J.cache[key]) J.cache[key] = await run('tc_getJournals', { '單元': unit, '班級': cls });
+  return J.cache[key];
+}
+async function viewJournal() {
+  const J = S.jrn; J.cls = J.cls || S.classes[0]; let us, L;
+  try { us = await unitList(); if (!J.uid || !us.some((u) => u.id === J.uid)) { J.uid = us[0].id; J.sec = null; J.date = null; } L = await lessonData(J.uid); }
+  catch (e) { $('#main').innerHTML = '<div class="notice">讀不到教案資料（' + esc(e.message) + '）。請確認網站可以開啟。</div>'; return; }
+  const unit = L['課程名稱'], all = await journalsOf(unit, J.cls);
+  const sess = L['節次'].find((x) => x['節'] === J.sec) || L['節次'][0]; J.sec = sess['節'];
+  const head = '<div class="card noprint"><div class="row"><div class="f"><label>單元</label><select id="ju">' + us.map((u) => '<option value="' + esc(u.id) + '"' + (u.id === J.uid ? ' selected' : '') + '>' + esc(u.title) + '</option>').join('') + '</select></div>' +
+    '<div class="f"><label>班級</label><select id="jc">' + optList(S.classes, J.cls) + '</select></div>' +
+    (J.mode === 'edit' ? '<div class="f"><label>節次</label><select id="js">' + L['節次'].map((x) => '<option value="' + x['節'] + '"' + (x['節'] === J.sec ? ' selected' : '') + '>第 ' + x['節'] + ' 節　' + esc(x['主題']) + '</option>').join('') + '</select></div>' : '') +
+    '<div class="f" style="justify-content:flex-end"><div class="row"><button class="btn sm' + (J.mode === 'edit' ? '' : ' ghost') + '" data-jm="edit">寫紀錄</button><button class="btn sm' + (J.mode === 'list' ? '' : ' ghost') + '" data-jm="list">歷程總覽（' + all.length + ' 筆）</button></div></div></div></div>';
+  const bindHead = () => {
+    $('#ju').onchange = (e) => { J.uid = e.target.value; J.sec = null; J.date = null; viewJournal(); };
+    $('#jc').onchange = (e) => { J.cls = e.target.value; J.date = null; viewJournal(); };
+    if ($('#js')) $('#js').onchange = (e) => { J.sec = Number(e.target.value); J.date = null; viewJournal(); };
+    $$('[data-jm]').forEach((b) => { b.onclick = () => { J.mode = b.dataset.jm; viewJournal(); }; });
+  };
+  if (J.mode === 'list') { journalList(L, unit, all, head); bindHead(); return; }
+
+  const mineS = all.filter((r) => r['節'] === J.sec);
+  if (!J.date) J.date = mineS.length ? mineS[mineS.length - 1]['日期'] : today();
+  const rec = mineS.find((r) => r['日期'] === J.date) || {};
+  const before = all.filter((r) => !(r['節'] === J.sec && r['日期'] === J.date) && (r['日期'] < J.date || (r['日期'] === J.date && r['節'] < J.sec)));
+  const prev = before[before.length - 1];
+  const said = parseSaid(rec['學生說出']), phrases = sessPhrases(sess), obs = parseObs(rec['個別觀察']);
+  const dimRow = (d) => '<div class="mem" style="align-items:flex-start;flex-wrap:wrap"><div style="min-width:7em"><b>' + esc(d.k) + '</b><div class="small muted">' + esc(d.hint) + '</div></div>' +
+    '<select class="jd" data-k="' + esc(d.k) + '">' + ['', 3, 2, 1].map((v) => '<option value="' + v + '"' + (String(rec[d.k] == null ? '' : rec[d.k]) === String(v) ? ' selected' : '') + '>' + (v ? v + ' ' + JLV[d.who][v] : '—') + '</option>').join('') + '</select>' +
+    '<input class="jdn" data-k="' + esc(d.k) + '" style="flex:1;min-width:12em" maxlength="300" placeholder="具體觀察（選填）" value="' + esc(rec[d.k + '備註'] || '') + '"></div>';
+  const obsRow = (o) => '<div class="mem jo"><select class="jon"><option value="">座號</option>' + clsRoster(J.cls).map((r) => '<option value="' + r['座號'] + '"' + (Number(o.no) === Number(r['座號']) ? ' selected' : '') + '>' + r['座號'] + (r['暱稱'] ? ' ' + esc(r['暱稱']) : '') + '</option>').join('') + '</select><input class="jot" style="flex:1" maxlength="200" placeholder="例如：主動當計分員、不敢開口說 Swing!" value="' + esc(o.txt || '') + '"><button class="btn sm ghost iconbtn jox" title="刪除">✕</button></div>';
+  $('#main').innerHTML = head +
+    (prev && (prev['要調整'] || prev['下次複習']) ? '<div class="notice small"><b>上次（第 ' + prev['節'] + ' 節，' + esc(prev['日期']) + '）的紀錄</b>' + (prev['要調整'] ? '<br>要調整：' + esc(prev['要調整']) : '') + (prev['下次複習'] ? '<br>下次複習：' + esc(prev['下次複習']) : '') + '<br><span class="muted">這節有沒有做到？可以寫在下面的「做得好」或「要調整」。</span></div>' : '') +
+    '<div class="card"><h3>本節數據（課堂 iPad 與課堂評分）</h3><div id="jdata" class="small muted">載入中…</div></div>' +
+    '<div class="card"><div class="row"><div class="f"><label>上課日期</label><input type="date" id="jdt" value="' + esc(J.date) + '"></div>' +
+    '<div class="f"><label>進度</label><select id="jp">' + optList(PROG, rec['進度'] || '已完成') + '</select></div>' +
+    '<div class="f" style="flex:1;min-width:14em"><label>沒教完的部分（部分完成／延後時填）</label><input id="jpu" maxlength="500" value="' + esc(rec['未完成'] || '') + '"></div></div>' +
+    (mineS.length > 1 ? '<p class="small muted" style="margin:6px 0 0">這一節有 ' + mineS.length + ' 天的紀錄：' + mineS.map((r) => '<a href="#" class="jday" data-d="' + esc(r['日期']) + '">' + esc(r['日期']) + '</a>').join('、') + '</p>' : '') +
+    (rec['更新時間'] ? '<p class="small muted" style="margin:6px 0 0">已存過（' + esc(rec['更新時間']) + '），修改後再儲存會覆蓋。</p>' : '<p class="small muted" style="margin:6px 0 0">這一天這一節還沒有紀錄。</p>') + '</div>' +
+    '<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(360px,1fr))">' +
+    '<div class="card"><h3>教師自我觀察</h3>' + JDIMS.filter((d) => d.who === '教師').map(dimRow).join('') + '</div>' +
+    '<div class="card"><h3>學生課堂反應</h3>' + JDIMS.filter((d) => d.who === '學生').map(dimRow).join('') + '</div></div>' +
+    '<div class="card"><h3>英語使用</h3><div class="row"><div class="f"><label>老師英語使用比例（估計）</label><select id="jer">' + EN_RATIO.map((x) => '<option value="' + esc(x) + '"' + ((rec['英語比例'] || '') === x ? ' selected' : '') + '>' + (x || '—') + '</option>').join('') + '</select></div>' +
+    '<div class="f" style="flex:1;min-width:14em"><label>什麼時候改用中文？為什麼？</label><input id="jzh" maxlength="500" value="' + esc(rec['中文輔助'] || '') + '" placeholder="例如：解釋甩棒為什麼危險時改用中文"></div></div>' +
+    '<label style="margin-top:10px">學生說出的英語（點一下切換：未觀察 → 多數會說 ✓ → 少數會說 △）</label><div class="row" id="jsay">' +
+    (phrases.length ? phrases.map((p) => '<button class="btn sm ghost jsy" data-p="' + esc(p) + '" data-v="' + (said.m[p] || '') + '">' + esc(p) + ' <b>' + (said.m[p] || '') + '</b></button>').join('') : '<span class="small muted">教案這一節沒有列「學生回應」。</span>') + '</div>' +
+    '<div class="f" style="margin-top:8px"><label>其他學生自己說出的英語</label><input id="jso" maxlength="200" value="' + esc(said.other) + '" placeholder="例如：Nice try!"></div></div>' +
+    '<div class="card"><h3>個別學生觀察</h3><div id="jobs">' + (obs.length ? obs : [{}]).map(obsRow).join('') + '</div><button class="btn sm ghost" id="joadd" style="margin-top:6px">＋ 再加一位</button>' +
+    '<p class="small muted" style="margin:6px 0 0">記下特別的表現或需要關注的同學（只存座號，不存姓名）。</p></div>' +
+    '<div class="card"><h3>省思</h3><div class="f"><label>做得好（保留下來）</label><textarea id="jgood" rows="3" maxlength="1000">' + esc(rec['做得好'] || '') + '</textarea></div>' +
+    '<div class="f" style="margin-top:8px"><label>要調整（下次怎麼改）</label><textarea id="jfix" rows="3" maxlength="1000">' + esc(rec['要調整'] || '') + '</textarea></div>' +
+    '<div class="f" style="margin-top:8px"><label>下次複習（口令、動作或規則）</label><input id="jrev" maxlength="500" value="' + esc(rec['下次複習'] || '') + '"></div>' +
+    '<div class="row" style="margin-top:12px"><button class="btn" id="jsv">儲存</button>' + (rec['更新時間'] ? '<button class="btn sm danger" id="jdel">刪除這筆</button>' : '') + '</div></div>';
+  bindHead();
+  $('#jdt').onchange = (e) => { J.date = e.target.value; viewJournal(); };
+  $$('.jday').forEach((a) => { a.onclick = (e) => { e.preventDefault(); J.date = a.dataset.d; viewJournal(); }; });
+  $('#jsay').onclick = (e) => { const b = e.target.closest('.jsy'); if (!b) return; const nx = { '': '✓', '✓': '△', '△': '' }[b.dataset.v]; b.dataset.v = nx; b.querySelector('b').textContent = nx; b.title = SAID[nx]; };
+  $('#joadd').onclick = () => { $('#jobs').insertAdjacentHTML('beforeend', obsRow({})); };
+  $('#jobs').onclick = (e) => { const x = e.target.closest('.jox'); if (x) x.closest('.jo').remove(); };
+  $('#jsv').onclick = async () => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test($('#jdt').value)) return toast('請選上課日期');
+    const p = { '單元': unit, '節': J.sec, '班級': J.cls, '日期': $('#jdt').value, '進度': $('#jp').value, '未完成': $('#jpu').value.trim(),
+      '英語比例': $('#jer').value, '中文輔助': $('#jzh').value.trim(), '做得好': $('#jgood').value.trim(), '要調整': $('#jfix').value.trim(), '下次複習': $('#jrev').value.trim() };
+    $$('.jd').forEach((x) => { p[x.dataset.k] = x.value === '' ? '' : Number(x.value); });
+    $$('.jdn').forEach((x) => { p[x.dataset.k + '備註'] = x.value.trim(); });
+    p['學生說出'] = $$('.jsy').filter((b) => b.dataset.v).map((b) => b.dataset.p + b.dataset.v).concat($('#jso').value.trim() ? ['其他：' + $('#jso').value.trim()] : []).join('｜');
+    const lines = []; let bad = '';
+    $$('.jo').forEach((r) => { const no = r.querySelector('.jon').value, t = r.querySelector('.jot').value.trim().replace(/\n/g, ' '); if (t && !no) bad = '個別觀察有一筆沒選座號'; if (no && t) lines.push(no + '：' + t); });
+    if (bad) return toast(bad);
+    p['個別觀察'] = lines.join('\n');
+    if (p['進度'] !== '已完成' && !p['未完成']) return toast('進度不是「已完成」，請寫下沒教完的部分');
+    $('#jsv').disabled = true;
+    try { S.jrn.cache[unit + '|' + J.cls] = await run('tc_saveJournal', p); J.date = p['日期']; toast('已儲存第 ' + J.sec + ' 節（' + p['日期'] + '）的教學紀錄'); viewJournal(); }
+    catch (e) { toast('失敗：' + e.message); $('#jsv').disabled = false; }
+  };
+  if ($('#jdel')) $('#jdel').onclick = async () => {
+    if (!confirm('確定刪除第 ' + J.sec + ' 節 ' + J.date + ' 的教學紀錄？')) return;
+    try { S.jrn.cache[unit + '|' + J.cls] = await run('tc_deleteJournal', { '單元': unit, '節': J.sec, '班級': J.cls, '日期': J.date }); J.date = null; toast('已刪除'); viewJournal(); } catch (e) { toast('失敗：' + e.message); }
+  };
+  journalData(unit, J.sec, J.cls);
+}
+// 本節數據：iPad 自評（每項平均與人數）＋課堂評分的等第分布，和老師的主觀觀察對照（三角檢核）
+async function journalData(unit, sec, cls) {
+  const box = () => $('#jdata'); let html = '';
+  try {
+    await assessOf(cls);
+    const self = (S.assessRaw[cls] || []).filter((r) => r[1] === unit && Number(r[2]) === sec && r[3] === '自評'), byIt = {};
+    self.forEach((r) => { (byIt[r[6]] = byIt[r[6]] || []).push(r[7]); });
+    const who = new Set(self.map((r) => r[4])).size;
+    html += '<div><b>iPad 自評</b>：' + (self.length ? who + ' 位學生、' + self.length + ' 筆　' + Object.entries(byIt).map(([k, v]) => '<span class="tag">' + esc(k) + ' ' + faceOf(mean(v)) + ' ' + mean(v).toFixed(2) + '</span>').join(' ') : '還沒有') + '</div>';
+    const tg = (await run('tc_getTeacherGrades', { '單元': unit, '節': sec, '班級': cls })).filter((r) => r['項目'] !== '備註' && Number(r['等第']) > 0), byG = {};
+    tg.forEach((r) => { const m = (byG[r['項目']] = byG[r['項目']] || { 1: 0, 2: 0, 3: 0 }); m[Number(r['等第'])]++; });
+    html += '<div style="margin-top:4px"><b>課堂評分</b>：' + (tg.length ? Object.entries(byG).map(([k, g]) => '<span class="tag">' + esc(k) + '　優異 ' + g[3] + '／達成 ' + g[2] + '／努力中 ' + g[1] + '</span>').join(' ') : '還沒有') + '</div>';
+  } catch (e) { html = '讀不到本節數據：' + esc(e.message); }
+  if (box()) box().innerHTML = html;
+}
+// 歷程總覽：各節六面向的變化、要調整的事，以及整理成教案「教學歷程與省思」的文字
+function journalList(L, unit, all, head) {
+  const J = S.jrn, nm = (n) => { const s = L['節次'].find((x) => x['節'] === n); return '第 ' + n + ' 節' + (s ? '　' + s['主題'] : ''); };
+  const cell = (d, v) => '<td>' + (v ? '<span class="tag ' + (v === 3 ? 'good' : v === 1 ? 'warn' : '') + '">' + v + ' ' + JLV[d.who][v] + '</span>' : '<span class="muted">—</span>') + '</td>';
+  const avg = (k) => { const v = all.map((r) => r[k]).filter((x) => x); return v.length ? mean(v).toFixed(1) : '—'; };
+  const text = () => '【' + unit + '　' + J.cls + '　教學歷程與省思】\n' + all.map((r) => nm(r['節']) + '（' + r['日期'] + '，' + r['進度'] + (r['未完成'] ? '：' + r['未完成'] : '') + '）\n' +
+    '・教師：' + JDIMS.filter((d) => d.who === '教師').map((d) => d.k + ' ' + jlabel(d, r[d.k]) + (r[d.k + '備註'] ? '（' + r[d.k + '備註'] + '）' : '')).join('；') + '\n' +
+    '・學生：' + JDIMS.filter((d) => d.who === '學生').map((d) => d.k + ' ' + jlabel(d, r[d.k]) + (r[d.k + '備註'] ? '（' + r[d.k + '備註'] + '）' : '')).join('；') + '\n' +
+    (r['英語比例'] || r['中文輔助'] ? '・英語使用：' + (r['英語比例'] || '') + (r['中文輔助'] ? '；改用中文：' + r['中文輔助'] : '') + '\n' : '') +
+    (r['做得好'] ? '・做得好：' + r['做得好'] + '\n' : '') + (r['要調整'] ? '・要調整：' + r['要調整'] + '\n' : '')).join('\n');
+  $('#main').innerHTML = head + '<div class="card"><h3>' + esc(unit) + '　' + esc(J.cls) + '：各節紀錄</h3>' +
+    (all.length ? '<div class="scroll"><table><thead><tr><th>日期</th><th>節次</th><th>進度</th>' + JDIMS.map((d) => '<th>' + esc(d.k) + '<div class="small muted">' + d.who + '</div></th>').join('') + '<th>英語比例</th><th>要調整</th></tr></thead><tbody>' +
+      all.map((r) => '<tr class="pick" data-s="' + r['節'] + '" data-d="' + esc(r['日期']) + '"><td>' + esc(r['日期'].slice(5)) + '</td><td>' + esc(nm(r['節'])) + '</td><td>' + esc(r['進度']) + '</td>' + JDIMS.map((d) => cell(d, r[d.k])).join('') + '<td class="small">' + esc(r['英語比例'] || '—') + '</td><td class="small">' + esc(r['要調整'] || '') + '</td></tr>').join('') +
+      '<tr class="statrow"><td colspan="3"><b>平均（1–3）</b></td>' + JDIMS.map((d) => '<td><b>' + avg(d.k) + '</b></td>').join('') + '<td colspan="2"></td></tr></tbody></table></div>' +
+      '<p class="small muted">點一列可打開那一節的紀錄。3＝順利／高、2＝尚可／中、1＝需調整／低。</p>' : '<p class="muted">這個單元、這一班還沒有教學紀錄。到「寫紀錄」每節課後填一次。</p>') + '</div>' +
+    (all.length ? '<div class="card"><h3>整理成文字</h3><p class="small muted">可貼到教案的「教學歷程與省思」或行動研究報告。</p><textarea id="jtxt" rows="12" readonly>' + esc(text()) + '</textarea>' +
+      '<div class="row" style="margin-top:8px"><button class="btn sm" id="jcp">複製</button><button class="btn sm ghost" id="jcsv">下載全部教學紀錄 CSV（所有單元與班級）</button></div></div>' : '');
+  $$('tr.pick').forEach((tr) => { tr.onclick = () => { J.mode = 'edit'; J.sec = Number(tr.dataset.s); J.date = tr.dataset.d; viewJournal(); }; });
+  if ($('#jcp')) $('#jcp').onclick = async () => { const t = $('#jtxt'); t.select(); try { await navigator.clipboard.writeText(t.value); toast('已複製'); } catch (e) { document.execCommand('copy'); toast('已複製'); } };
+  if ($('#jcsv')) $('#jcsv').onclick = async () => {
+    try {
+      const rows = await run('tc_getJournals', {}), h = Object.keys(rows[0] || { '日期': '' });
+      const t = '﻿' + [h].concat(rows.map((r) => h.map((k) => r[k]))).map((a) => a.map((c) => '"' + String(c == null ? '' : c).replace(/"/g, '""') + '"').join(',')).join('\r\n');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([t], { type: 'text/csv' })); a.download = '教學紀錄.csv'; a.click();
+    } catch (e) { toast('失敗：' + e.message); }
   };
 }
 

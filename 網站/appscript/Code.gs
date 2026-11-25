@@ -12,8 +12,10 @@
 const SHEET = {
   roster: '學生名單', assess: '學生評量', weak: '不熟悉清單',
   taught: '教學進度', reflect: '教學省思', review: '複習排程', scores: '體育成績', groups: '分組紀錄', tgrade: '教師評量', entries: '賽事選手',
-  ugroups: '單元分組', peer: '同儕計分'
+  ugroups: '單元分組', peer: '同儕計分', journal: '教學紀錄'
 };
+/* 教學紀錄的六個觀察面向（行動研究論文：教師＝班級經營、教學內容、教學技巧；學生＝參與度、回饋、專注度），每項 1–3 */
+const JOURNAL_DIMS = ['班級經營', '教學內容', '教學技巧', '參與度', '回饋', '專注度'];
 const CLASSES = ['甲班', '乙班'];
 const HEADERS = {
   '學生名單': ['座號', '隊', '暱稱', '班級', '性別'],
@@ -27,7 +29,9 @@ const HEADERS = {
   '分組紀錄': ['分組ID', '建立時間', '名稱', '日期', '策略', '參數', '備註', '組別', '班級', '座號', '棒次', '成績'],
   '賽事選手': ['名單ID', '建立時間', '名稱', '賽事', '參數', '備註', '班級', '座號', '性別', '角色', '棒次', '成績'],
   '單元分組': ['單元', '班級', '組別', '組內編號', '座號', '更新時間'],
-  '同儕計分': ['時間', '單元', '節', '班級', '組別', '輪', '計分員座號', '打者座號', '項目分數', '得分']
+  '同儕計分': ['時間', '單元', '節', '班級', '組別', '輪', '計分員座號', '打者座號', '項目分數', '得分'],
+  '教學紀錄': ['日期', '單元', '節', '班級', '進度', '未完成', '班級經營', '班級經營備註', '教學內容', '教學內容備註', '教學技巧', '教學技巧備註',
+    '參與度', '參與度備註', '回饋', '回饋備註', '專注度', '專注度備註', '英語比例', '學生說出', '中文輔助', '做得好', '要調整', '下次複習', '個別觀察', '更新時間']
 };
 
 /** 第一次使用：在 Apps Script 編輯器執行一次 setup()，會建立所有工作表與表頭。 */
@@ -436,6 +440,46 @@ function tc_savePeerScores(p) {
     replaceRows_(SHEET.peer, function (o) { return o.單元 === p.單元 && Number(o.節) === Number(p.節) && o.班級 === p.班級 && String(o.組別) === String(p.組別); }, add);
   } finally { lock.releaseLock(); }
   return tc_getPeerScores(p);
+}
+
+/* ---------- 教學紀錄（每節課後的觀察日誌＋省思）：同一單元／節／班級／日期一筆，重存＝更正 ---------- */
+function journalRow_(r) {
+  const o = {}; HEADERS[SHEET.journal].forEach(function (k) { o[k] = plain_(r[k]); });
+  o.日期 = dateStr_(r.日期); o.節 = Number(r.節);
+  JOURNAL_DIMS.forEach(function (k) { o[k] = r[k] === '' ? '' : Number(r[k]); });
+  return o;
+}
+function tc_getJournals(p) {
+  assertOwner_(); ensure_(SHEET.journal); p = p || {};
+  return rows_(SHEET.journal).filter(function (r) { return (!p.單元 || r.單元 === p.單元) && (!p.班級 || r.班級 === p.班級); })
+    .map(journalRow_).sort(function (a, b) { return a.日期 < b.日期 ? -1 : a.日期 > b.日期 ? 1 : a.節 - b.節; });
+}
+function tc_saveJournal(p) {
+  assertOwner_();
+  if (!p.單元 || !(Number(p.節) > 0)) throw new Error('缺少單元或節次');
+  if (CLASSES.indexOf(p.班級) < 0) throw new Error('班級必須是 ' + CLASSES.join(' 或 '));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.日期))) throw new Error('日期格式必須是 YYYY-MM-DD');
+  if (['已完成', '部分完成', '延後'].indexOf(p.進度) < 0) throw new Error('進度必須是 已完成、部分完成 或 延後');
+  JOURNAL_DIMS.forEach(function (k) { if (p[k] !== '' && p[k] != null && [1, 2, 3].indexOf(Number(p[k])) < 0) throw new Error(k + ' 必須是 1–3'); });
+  const txt = function (k, n) { return String(p[k] == null ? '' : p[k]).slice(0, n || 500); };
+  const rec = { 日期: String(p.日期), 單元: p.單元, 節: Number(p.節), 班級: p.班級, 進度: p.進度, 未完成: txt('未完成'),
+    英語比例: txt('英語比例', 20), 學生說出: txt('學生說出'), 中文輔助: txt('中文輔助'), 做得好: txt('做得好', 1000), 要調整: txt('要調整', 1000),
+    下次複習: txt('下次複習'), 個別觀察: txt('個別觀察', 2000), 更新時間: now_() };
+  JOURNAL_DIMS.forEach(function (k) { rec[k] = p[k] === '' || p[k] == null ? '' : Number(p[k]); rec[k + '備註'] = txt(k + '備註', 300); });
+  const lock = LockService.getScriptLock(); lock.waitLock(15000);
+  try {
+    ensure_(SHEET.journal).getRange('A:A').setNumberFormat('@');      // 日期存純文字，避免試算表轉成日期
+    replaceRows_(SHEET.journal, function (o) { return o.單元 === rec.單元 && Number(o.節) === rec.節 && o.班級 === rec.班級 && dateStr_(o.日期) === rec.日期; },
+      [HEADERS[SHEET.journal].map(function (k) { return rec[k]; })]);
+  } finally { lock.releaseLock(); }
+  return tc_getJournals({ 單元: rec.單元, 班級: rec.班級 });
+}
+function tc_deleteJournal(p) {
+  assertOwner_();
+  const lock = LockService.getScriptLock(); lock.waitLock(15000);
+  try { replaceRows_(SHEET.journal, function (o) { return o.單元 === p.單元 && Number(o.節) === Number(p.節) && o.班級 === p.班級 && dateStr_(o.日期) === String(p.日期); }, []); }
+  finally { lock.releaseLock(); }
+  return tc_getJournals({ 單元: p.單元, 班級: p.班級 });
 }
 
 /* ---------- 運動會選手名單（400 公尺接力、80 公尺…）：一次存成多列，用「名單ID」串起來，可隨時叫出來調整 ---------- */
