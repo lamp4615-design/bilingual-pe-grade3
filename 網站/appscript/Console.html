@@ -179,25 +179,38 @@ async function viewRec() {
 }
 
 /* ===== 課堂評分：老師逐人登記三等第與備註 ===== */
-async function lessonData() {
-  if (S.grade.lesson) return S.grade.lesson;
-  const us = await (await fetch(SITE + 'data/units.json', { cache: 'no-cache' })).json();
-  S.grade.lesson = await (await fetch(SITE + us[0].lesson, { cache: 'no-cache' })).json(); return S.grade.lesson;
+async function unitList() {
+  if (!S.grade.units) S.grade.units = await (await fetch(SITE + 'data/units.json', { cache: 'no-cache' })).json();
+  return S.grade.units;
+}
+async function lessonData(uid) {
+  S.grade.lessons = S.grade.lessons || {};
+  if (S.grade.lessons[uid]) return S.grade.lessons[uid];
+  const u = (await unitList()).find((x) => x.id === uid);
+  S.grade.lessons[uid] = await (await fetch(SITE + u.lesson, { cache: 'no-cache' })).json(); return S.grade.lessons[uid];
 }
 async function viewGrade() {
-  const Gd = S.grade; Gd.cls = Gd.cls || S.classes[0]; let L;
-  try { L = await lessonData(); } catch (e) { $('#main').innerHTML = '<div class="notice">讀不到教案資料（' + esc(e.message) + '）。請確認網站可以開啟。</div>'; return; }
+  const Gd = S.grade; Gd.cls = Gd.cls || S.classes[0]; let L, us;
+  try {
+    us = await unitList(); if (!Gd.uid || !us.some((u) => u.id === Gd.uid)) { Gd.uid = us[0].id; Gd.sec = null; }
+    L = await lessonData(Gd.uid);
+  } catch (e) { $('#main').innerHTML = '<div class="notice">讀不到教案資料（' + esc(e.message) + '）。請確認網站可以開啟。</div>'; return; }
   const sess = L['節次'].find((x) => x['節'] === Gd.sec) || L['節次'][0]; Gd.sec = sess['節'];
-  const ev = sess['學生評量'] || {}; const names = Array.from(new Set((ev['自評'] || []).concat(ev['同儕'] || []))); const items = names.length ? names : L['評量規準'].map((r) => r['項目']);
+  // 評量項目：優先用該節的「教師評量」，沒有就用學生自評＋同儕的項目，再沒有就用全部評量規準
+  const ev = sess['學生評量'] || {}; const names = (sess['教師評量'] && sess['教師評量'].length) ? sess['教師評量'] : Array.from(new Set((ev['自評'] || []).concat(ev['同儕'] || []))); const items = names.length ? names : L['評量規準'].map((r) => r['項目']);
+  const rub = {}; L['評量規準'].forEach((r) => { rub[r['項目']] = r['等第'] || {}; });
   const unit = L['課程名稱']; Gd.rows = await run('tc_getTeacherGrades', { '單元': unit, '節': Gd.sec, '班級': Gd.cls });
   const cur = {}, note = {}; Gd.rows.forEach((r) => { if (r['項目'] === '備註') note[r['座號']] = r['備註']; else cur[r['座號'] + '|' + r['項目']] = Number(r['等第']); });
-  $('#main').innerHTML = '<div class="card"><div class="row"><div class="f"><label>班級</label><select id="gc">' + optList(S.classes, Gd.cls) + '</select></div>' +
+  $('#main').innerHTML = '<div class="card"><div class="row"><div class="f"><label>單元</label><select id="gu">' + us.map((u) => '<option value="' + esc(u.id) + '"' + (u.id === Gd.uid ? ' selected' : '') + '>' + esc(u.title) + '</option>').join('') + '</select></div>' +
+    '<div class="f"><label>班級</label><select id="gc">' + optList(S.classes, Gd.cls) + '</select></div>' +
     '<div class="f"><label>節次</label><select id="gs">' + L['節次'].map((x) => '<option value="' + x['節'] + '"' + (x['節'] === Gd.sec ? ' selected' : '') + '>第 ' + x['節'] + ' 節　' + esc(x['主題']) + '</option>').join('') + '</select></div></div>' +
     '<p class="small muted">單元：' + esc(L['單元名稱']) + '。逐人選三等第（努力中／達成／優異），選「—」就是清除。這是老師的形成性觀察，不是成績。</p>' +
+    '<details class="small" style="margin:6px 0"><summary>本節評量規準（三等第說明）</summary>' + items.map((n) => { const g = rub[n] || {}; return '<p><b>' + esc(n) + '</b>　優異：' + esc(g['優異'] || '—') + '　／ 達成：' + esc(g['達成'] || '—') + '　／ 努力中：' + esc(g['努力中'] || '—') + '</p>'; }).join('') + '</details>' +
     '<div class="scroll"><table><thead><tr><th>座號</th>' + items.map((n) => '<th>' + esc(n) + '</th>').join('') + '<th>備註</th></tr></thead><tbody>' + clsRoster(Gd.cls).map((r) =>
       '<tr><td>' + r['座號'] + '</td>' + items.map((n) => '<td><select class="gg" data-no="' + r['座號'] + '" data-it="' + esc(n) + '">' + [0, 1, 2, 3].map((g) => '<option value="' + g + '"' + ((cur[r['座號'] + '|' + n] || 0) === g ? ' selected' : '') + '>' + GRADE_LABEL[g] + '</option>').join('') + '</select></td>').join('') +
       '<td><input class="gn" data-no="' + r['座號'] + '" value="' + esc(note[r['座號']] || '') + '" size="14" maxlength="200"></td></tr>').join('') + '</tbody></table></div>' +
     '<div class="row" style="margin-top:10px"><button class="btn" id="gsv">儲存</button><span class="small muted" id="gm"></span></div></div>';
+  $('#gu').onchange = (e) => { Gd.uid = e.target.value; Gd.sec = null; viewGrade(); };
   $('#gc').onchange = (e) => { Gd.cls = e.target.value; viewGrade(); };
   $('#gs').onchange = (e) => { Gd.sec = Number(e.target.value); viewGrade(); };
   $('#gsv').onclick = async () => {

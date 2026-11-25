@@ -27,7 +27,7 @@ Pages.home = async function () {
 
 /* ---------- 單元共用：分頁列 ---------- */
 function unitTabs(id, cur, extra) {
-  const t = [['', '概覽'], ['map', '課綱對照'], ['s', '六節進程'], ['assess', '評量']];
+  const t = [['', '概覽'], ['map', '課綱對照'], ['s', '各節進程'], ['assess', '評量']];
   return `<div class="tabs">${t.map(([k, n]) => `<a class="${cur === k ? 'on' : ''}" href="#/u/${id}${k ? '/' + k : ''}">${n}</a>`).join('')}${extra || ''}</div>`;
 }
 function unitHead(L) {
@@ -118,7 +118,7 @@ Pages.session = async function (id, no) {
   const dlg = d ? d['場景'].map((sc) => `<details><summary>${esc(sc['名稱'])}</summary><p class="small muted">${esc(sc['說明'])}</p>${sc['對話'].map((l) =>
     `<div class="dlg">${spk(l['說話者'])}<div>${esc(l['英文'])}${l['中文'] ? `<div class="zh">${esc(l['中文'])}</div>` : ''}${l['提示'] ? `<div class="hint">${esc(l['提示'])}</div>` : ''}</div></div>`).join('')}</details>`).join('') : '';
   return {
-    html: `<div class="small"><a href="#/u/${id}/s">← 六節進程</a></div><h1>第 ${s['節']} 節　${esc(s['主題'])}</h1>
+    html: `<div class="small"><a href="#/u/${id}/s">← 各節進程</a></div><h1>第 ${s['節']} 節　${esc(s['主題'])}</h1>
     <div class="row small muted"><span>${esc(s['場地'] || '')}</span><span>·</span><span>器材：${esc((s['器材'] || []).join('、'))}</span></div>
     <div class="card"><b>複習（螺旋）</b><ul style="margin:6px 0 0">${(s['複習'] || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>
     <div class="card"><h3>準備 · 發展 · 總結</h3>${part(w)}${s['活動'].map(part).join('')}
@@ -221,27 +221,33 @@ Pages.weak = async function () {
 /* ---------- 學習紀錄：學習項目庫（靜態內容）。成績、分組、評量、進度等老師資料都在「教師後台」 ---------- */
 Pages.records = async function () {
   const units = await DATA.units();
-  const { lesson: L, learning } = await DATA.unit(units[0].id);
-  const items = learning['項目'];
-  const cells = (i) => L['節次'].map((s) => `<td>${i['出現節'].includes(s['節']) ? '<span class="dot"></span>' : ''}</td>`).join('');
-  const table = (list) => `<div class="scroll"><table class="matrix"><thead><tr><th>內容</th>${L['節次'].map((s) => `<th>${s['節']}</th>`).join('')}</tr></thead><tbody>${list.map((i) =>
-    `<tr><td>${esc(i['內容'])}${i['新'] ? ' <span class="chip new">新</span>' : ''}</td>${cells(i)}</tr>`).join('')}</tbody></table></div>`;
-  const by = (t) => items.filter((i) => i['類型'] === t && !(t === '英語用語' && i['先備'] && !i['新']));
   const cu = API.consoleUrl();
-  return {
-    html: `<h1>學習紀錄</h1><h2 style="margin-top:0">${esc(L['單元名稱'])}</h2>
-    <div class="notice">學生成績、分組、自評／互評統計都在<b>教師後台</b>（用你的 Google 帳號登入，網站不需要密碼）。${cu ? `<a href="${esc(cu)}" target="_blank" rel="noopener">開啟教師後台</a>` : '<a href="#/settings">先到設定貼上後台網址</a>'}　<a href="#/go">課堂入口</a></div>
-    <h2>學習項目庫</h2><p class="small muted">圓點＝該節有出現。這份清單也是下一個單元「螺旋複習」的素材。</p>
+  let body = '';
+  for (const u of units) {
+    const { lesson: L, learning } = await DATA.unit(u.id);
+    const items = learning['項目'];
+    const cells = (i) => L['節次'].map((s) => `<td>${i['出現節'].includes(s['節']) ? '<span class="dot"></span>' : ''}</td>`).join('');
+    const table = (list) => `<div class="scroll"><table class="matrix"><thead><tr><th>內容</th>${L['節次'].map((s) => `<th>${s['節']}</th>`).join('')}</tr></thead><tbody>${list.map((i) =>
+      `<tr><td>${esc(i['內容'])}${i['新'] ? ' <span class="chip new">新</span>' : ''}</td>${cells(i)}</tr>`).join('')}</tbody></table></div>`;
+    const by = (t) => items.filter((i) => i['類型'] === t && !(t === '英語用語' && i['先備'] && !i['新']));
+    body += `<h2>${esc(L['單元名稱'])}</h2>
     <div class="card"><h3>教學目標（動作、策略、規則）</h3>${table(by('目標'))}</div>
     <div class="card"><h3>新字詞</h3>${table(by('新字詞'))}</div>
-    <div class="card"><h3>英語用語（教案中的口令、問答與鼓勵）</h3>${table(by('英語用語'))}</div>`
+    <div class="card"><h3>英語用語（教案中的口令、問答與鼓勵）</h3>${table(by('英語用語'))}</div>`;
+  }
+  return {
+    html: `<h1>學習紀錄</h1>
+    <div class="notice">學生成績、分組、自評／互評統計都在<b>教師後台</b>（用你的 Google 帳號登入，網站不需要密碼）。${cu ? `<a href="${esc(cu)}" target="_blank" rel="noopener">開啟教師後台</a>` : '<a href="#/settings">先到設定貼上後台網址</a>'}　<a href="#/go">課堂入口</a></div>
+    <p class="small muted">學習項目庫：圓點＝該節有出現。這份清單也是下一個單元「螺旋複習」的素材。</p>${body}`
   };
 };
 
 /* ---------- 課堂入口：手機／平板開哪個網址、QR code ---------- */
 const qrSvg = (text, cell) => { const q = qrcode(0, 'M'); q.addData(text); q.make(); return q.createSvgTag({ cellSize: cell || 4, margin: 2, scalable: true }); };
 Pages.go = async function () {
-  const units = await DATA.units(); const { lesson: L } = await DATA.unit(units[0].id); const uid = units[0].id;
+  const units = await DATA.units();
+  const lessons = [];
+  for (const u of units) lessons.push({ uid: u.id, L: (await DATA.unit(u.id)).lesson });
   const base = location.href.split('#')[0];
   const cu = API.consoleUrl();
   return {
@@ -253,16 +259,17 @@ Pages.go = async function () {
     <h2>學生：自評與同儕互評（平板）</h2>
     <div class="card"><div class="row"><label style="margin:0">班級代碼</label><input id="gcode" size="10" value="${esc(API.code())}" placeholder="例如 1234"><span class="small muted">會寫進 QR code，學生不用自己輸入。</span></div>
       <p class="small muted">每一節課有一個 QR code。學生掃了之後：選班級 → 選隊 → 選座號 → 自評或觀察夥伴。印出來或投影在黑板上都可以。</p></div>
-    <div class="grid" id="qrs">${L['節次'].map((s) => `<div class="card" style="text-align:center"><b>第 ${s['節']} 節</b><div class="small muted">${esc(s['主題'])}</div><div class="qrbox" data-n="${s['節']}" style="width:160px;margin:8px auto"></div>
-      <a class="btn sm ghost" href="#/eval/${uid}/${s['節']}${API.code() ? '?code=' + encodeURIComponent(API.code()) : ''}">預覽</a> <button class="btn sm ghost cp" data-n="${s['節']}">複製連結</button></div>`).join('')}</div>
+    ${lessons.map(({ uid, L }) => `<h3>${esc(L['單元名稱'])}</h3>
+    <div class="grid">${L['節次'].map((s) => `<div class="card" style="text-align:center"><b>第 ${s['節']} 節</b><div class="small muted">${esc(s['主題'])}</div><div class="qrbox" data-u="${esc(uid)}" data-n="${s['節']}" style="width:160px;margin:8px auto"></div>
+      <a class="btn sm ghost" href="#/eval/${uid}/${s['節']}${API.code() ? '?code=' + encodeURIComponent(API.code()) : ''}">預覽</a> <button class="btn sm ghost cp" data-u="${esc(uid)}" data-n="${s['節']}">複製連結</button></div>`).join('')}</div>`).join('')}
     <p class="small muted noprint">提醒：平板可以用 Safari／Chrome「加入主畫面」，下次就像 App 一樣一點就開。</p>`,
     after: () => {
-      const evalUrl = (n) => { const c = $('#gcode').value.trim(); return `${base}#/eval/${uid}/${n}${c ? '?code=' + encodeURIComponent(c) : ''}`; };
-      const draw = () => { $$('.qrbox').forEach((el) => { el.innerHTML = qrSvg(evalUrl(el.dataset.n)); }); };
+      const evalUrl = (u, n) => { const c = $('#gcode').value.trim(); return `${base}#/eval/${u}/${n}${c ? '?code=' + encodeURIComponent(c) : ''}`; };
+      const draw = () => { $$('.qrbox').forEach((el) => { el.innerHTML = qrSvg(evalUrl(el.dataset.u, el.dataset.n)); }); };
       if (cu) $('#qr-run').innerHTML = qrSvg(cu);
       draw();
       $('#gcode').oninput = () => { store.set('class_code', $('#gcode').value.trim()); draw(); };
-      $$('.cp').forEach((b) => { b.onclick = () => copyText(evalUrl(b.dataset.n), '已複製連結'); });
+      $$('.cp').forEach((b) => { b.onclick = () => copyText(evalUrl(b.dataset.u, b.dataset.n), '已複製連結'); });
     }
   };
 };

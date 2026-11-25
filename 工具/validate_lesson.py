@@ -89,6 +89,9 @@ def validate(L):
             for ref in s.get("學生評量", {}).get(k, []):
                 if ref not in {a.get("項目") for a in L.get("評量規準", [])}:
                     E(f"第{s['節']}節 學生評量{k} 引用不存在的評量項目 {ref}")
+        for ref in s.get("教師評量", []):
+            if ref not in {a.get("項目") for a in L.get("評量規準", [])}:
+                E(f"第{s['節']}節 教師評量 引用不存在的評量項目 {ref}")
     # 6 英語：新詞量控制
     lang = L.get("語言目標", {})
     known = {w.lower() for w in prior["字詞"]}
